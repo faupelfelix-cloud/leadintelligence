@@ -40,6 +40,7 @@ class LeadSurveillance:
         self.base = self.airtable.base(self.config['airtable']['base_id'])
         self.leads_table = self.base.table(self.config['airtable']['tables']['leads'])
         self.companies_table = self.base.table(self.config['airtable']['tables']['companies'])
+        self.trigger_history_table = self.base.table('Trigger History')
         
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
@@ -110,6 +111,12 @@ Company Context:
 
 Your mission: Monitor this lead's recent activity and identify relevant updates and trigger events for business development outreach.
 
+IMPORTANT DATE RULES:
+- Today's date is: {datetime.now().strftime('%Y-%m-%d')}
+- Only report FUTURE conferences (starting today or later)
+- Only report triggers from the last 3 months maximum
+- Do NOT report past events or old news
+
 SEARCH EXTENSIVELY for activity in the {period}:
 
 📱 LINKEDIN ACTIVITY:
@@ -128,10 +135,12 @@ SEARCH EXTENSIVELY for activity in the {period}:
 - Retweets and engagement patterns
 
 📅 CONFERENCES & EVENTS:
+- ONLY upcoming/future conferences (not past events)
 - Upcoming speaking engagements
 - Conferences they'll attend (search conference websites)
 - Panel discussions or presentations
 - Networking events mentioned
+- Include specific dates and verify they are in the future
 
 🏢 COMPANY NEWS:
 - Funding announcements
@@ -141,16 +150,20 @@ SEARCH EXTENSIVELY for activity in the {period}:
 - Press releases mentioning the lead or company
 
 🎯 TRIGGER EVENTS (High Priority):
-Identify actionable trigger events:
-- NEW JOB/PROMOTION: Started new role or got promoted
+Identify actionable trigger events using ONLY these types:
 - FUNDING: Company raised money (need manufacturing scale-up)
-- PIPELINE MILESTONE: IND filed, Phase transition, positive results
-- SPEAKING: Confirmed for upcoming conference (meeting opportunity)
+- PROMOTION: Got promoted to new role with decision authority
+- JOB_CHANGE: Started new job at different company
+- SPEAKING: Confirmed for upcoming conference presentation
 - CONFERENCE_ATTENDANCE: Attending (not speaking) at upcoming conference
 - HIRING: Posted CMC/manufacturing jobs (capacity issues)
+- PIPELINE: IND filed, Phase transition, positive trial results
 - PARTNERSHIP: Announced CDMO partnership (competitive intel)
-- AWARD/RECOGNITION: Won award or recognition
-- PAIN POINT: Discussed challenges in manufacturing/CMC
+- AWARD: Won award or recognition
+- PAIN_POINT: Discussed challenges in manufacturing/CMC
+- OTHER: Any other trigger that doesn't fit above categories
+
+IMPORTANT: Use ONLY the exact type names listed above. Do not create new categories like "PIPELINE_MILESTONE" or "COMPANY_SUCCESS" - map them to the closest match from the list.
 
 💡 BEHAVIORAL INSIGHTS:
 - Activity level changes (more/less active than before)
@@ -411,7 +424,35 @@ Only return valid JSON, no other text."""
         
         return '\n'.join(output)
     
-    def update_lead_activity(self, lead_record_id: str, activity_data: Dict):
+    def log_trigger_to_history(self, lead_record_id: str, lead_name: str, 
+                               company_record_id: str, trigger_event: Dict):
+        """Log a trigger event to the Trigger History table for permanent record"""
+        
+        try:
+            history_record = {
+                'Date Detected': datetime.now().strftime('%Y-%m-%d'),
+                'Lead': [lead_record_id],  # Link to lead
+                'Trigger Type': trigger_event.get('type', 'OTHER'),
+                'Urgency': trigger_event.get('urgency', 'MEDIUM'),
+                'Description': trigger_event.get('description', ''),
+                'Outreach Angle': trigger_event.get('outreach_angle', ''),
+                'Timing Recommendation': trigger_event.get('timing_recommendation', ''),
+                'Event Date': trigger_event.get('date', ''),
+                'Status': 'New'  # Options: New, In Progress, Contacted, Completed
+            }
+            
+            # Add company link if available
+            if company_record_id:
+                history_record['Company'] = [company_record_id]
+            
+            self.trigger_history_table.create(history_record)
+            logger.info(f"    ✓ Logged to Trigger History")
+            
+        except Exception as e:
+            logger.warning(f"    Could not log to Trigger History: {str(e)}")
+    
+    def update_lead_activity(self, lead_record_id: str, activity_data: Dict, 
+                            company_record_id: str = None):
         """Update Airtable lead record with activity report"""
         
         formatted_report = self.format_activity_report(activity_data)
@@ -443,9 +484,63 @@ Only return valid JSON, no other text."""
                 ])
                 update_fields['Trigger Events'] = trigger_summary
                 
-                # Categorize trigger types for easy filtering
-                trigger_types = list(set([e.get('type', 'OTHER') for e in trigger_events]))
+                # Categorize trigger types with strict validation
+                # Only use exact matches from the predefined list
+                valid_categories = {
+                    'FUNDING', 'PROMOTION', 'SPEAKING', 'CONFERENCE_ATTENDANCE',
+                    'HIRING', 'PIPELINE', 'PARTNERSHIP', 'AWARD', 
+                    'PAIN_POINT', 'JOB_CHANGE', 'OTHER'
+                }
+                
+                trigger_types_raw = [e.get('type', 'OTHER') for e in trigger_events]
+                # Map variations to valid categories
+                trigger_types = []
+                for t in trigger_types_raw:
+                    t_upper = t.upper()
+                    # Direct match
+                    if t_upper in valid_categories:
+                        trigger_types.append(t_upper)
+                    # Map common variations
+                    elif 'PIPELINE' in t_upper or 'MILESTONE' in t_upper:
+                        trigger_types.append('PIPELINE')
+                    elif 'CONFERENCE' in t_upper and 'ATTEND' in t_upper:
+                        trigger_types.append('CONFERENCE_ATTENDANCE')
+                    elif 'CONFERENCE' in t_upper or 'SPEAKING' in t_upper:
+                        trigger_types.append('SPEAKING')
+                    elif 'FUND' in t_upper or 'CAPITAL' in t_upper or 'INVESTMENT' in t_upper:
+                        trigger_types.append('FUNDING')
+                    elif 'HIRE' in t_upper or 'HIRING' in t_upper or 'RECRUIT' in t_upper:
+                        trigger_types.append('HIRING')
+                    elif 'JOB' in t_upper or 'PROMOTION' in t_upper or 'ROLE' in t_upper:
+                        trigger_types.append('JOB_CHANGE')
+                    elif 'PARTNER' in t_upper:
+                        trigger_types.append('PARTNERSHIP')
+                    elif 'AWARD' in t_upper or 'RECOGNITION' in t_upper:
+                        trigger_types.append('AWARD')
+                    elif 'PAIN' in t_upper or 'CHALLENGE' in t_upper or 'PROBLEM' in t_upper:
+                        trigger_types.append('PAIN_POINT')
+                    else:
+                        trigger_types.append('OTHER')
+                
+                # Remove duplicates and store
+                trigger_types = list(set(trigger_types))
                 update_fields['Trigger Categories'] = trigger_types
+            
+            # Log each trigger to history table for permanent record
+            lead_name = ""
+            try:
+                lead_record = self.leads_table.get(lead_record_id)
+                lead_name = lead_record['fields'].get('Lead Name', 'Unknown')
+            except:
+                pass
+            
+            for trigger_event in trigger_events:
+                self.log_trigger_to_history(
+                    lead_record_id=lead_record_id,
+                    lead_name=lead_name,
+                    company_record_id=company_record_id,
+                    trigger_event=trigger_event
+                )
         else:
             # Clear trigger fields if no events
             update_fields['Has Trigger Event'] = False
@@ -521,7 +616,13 @@ Only return valid JSON, no other text."""
                 
                 # Save to Airtable
                 logger.info("  Saving activity report...")
-                self.update_lead_activity(record_id, activity_data)
+                
+                # Get company record ID for linking
+                company_record_id = None
+                if 'Company' in fields and fields['Company']:
+                    company_record_id = fields['Company'][0]
+                
+                self.update_lead_activity(record_id, activity_data, company_record_id)
                 
                 # Check for triggers
                 trigger_events = activity_data.get('trigger_events', [])
