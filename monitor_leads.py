@@ -163,7 +163,9 @@ Identify actionable trigger events using ONLY these types:
 - PAIN_POINT: Discussed challenges in manufacturing/CMC
 - OTHER: Any other trigger that doesn't fit above categories
 
-IMPORTANT: Use ONLY the exact type names listed above. Do not create new categories like "PIPELINE_MILESTONE" or "COMPANY_SUCCESS" - map them to the closest match from the list.
+IMPORTANT: 
+- Use ONLY the exact type names listed above. Do not create new categories like "PIPELINE_MILESTONE" or "COMPANY_SUCCESS" - map them to the closest match from the list.
+- For EACH trigger event, include the source URLs where you found this information (LinkedIn post URL, news article, press release, conference website, etc.)
 
 💡 BEHAVIORAL INSIGHTS:
 - Activity level changes (more/less active than before)
@@ -216,7 +218,8 @@ Return your findings in this exact JSON format:
       "description": "Detailed description",
       "urgency": "HIGH/MEDIUM/LOW",
       "outreach_angle": "How to leverage this for outreach",
-      "timing_recommendation": "Reach out in next 2 weeks / Wait until after conference / etc"
+      "timing_recommendation": "Reach out in next 2 weeks / Wait until after conference / etc",
+      "sources": ["https://url1.com", "https://url2.com"]
     }},
     ...
   ],
@@ -331,6 +334,14 @@ Only return valid JSON, no other text."""
                 output.append(f"  Details: {event.get('description', 'No details')}")
                 output.append(f"  Outreach Angle: {event.get('outreach_angle', 'TBD')}")
                 output.append(f"  Timing: {event.get('timing_recommendation', 'TBD')}")
+                
+                # Add sources if available
+                sources = event.get('sources', [])
+                if sources:
+                    output.append(f"  Sources:")
+                    for source in sources[:3]:  # Show up to 3 sources
+                        output.append(f"    • {source}")
+                
                 output.append("")
         else:
             output.append("🎯 TRIGGER EVENTS")
@@ -425,7 +436,8 @@ Only return valid JSON, no other text."""
         return '\n'.join(output)
     
     def log_trigger_to_history(self, lead_record_id: str, lead_name: str, 
-                               company_record_id: str, trigger_event: Dict):
+                               company_record_id: str, trigger_event: Dict, 
+                               sources: list = None):
         """Log a trigger event to the Trigger History table for permanent record"""
         
         try:
@@ -444,6 +456,13 @@ Only return valid JSON, no other text."""
             # Add company link if available
             if company_record_id:
                 history_record['Company'] = [company_record_id]
+            
+            # Add sources if available
+            if sources:
+                sources_text = '\n'.join([f"• {source}" for source in sources[:5]])  # Limit to 5 sources
+                history_record['Sources'] = sources_text
+            elif trigger_event.get('source'):
+                history_record['Sources'] = trigger_event.get('source')
             
             self.trigger_history_table.create(history_record)
             logger.info(f"    ✓ Logged to Trigger History")
@@ -534,12 +553,19 @@ Only return valid JSON, no other text."""
             except:
                 pass
             
+            # Get overall sources from the activity data
+            overall_sources = activity_data.get('sources', [])
+            
             for trigger_event in trigger_events:
+                # Use trigger-specific sources if available, otherwise use overall sources
+                trigger_sources = trigger_event.get('sources', overall_sources)
+                
                 self.log_trigger_to_history(
                     lead_record_id=lead_record_id,
                     lead_name=lead_name,
                     company_record_id=company_record_id,
-                    trigger_event=trigger_event
+                    trigger_event=trigger_event,
+                    sources=trigger_sources
                 )
         else:
             # Clear trigger fields if no events
