@@ -320,24 +320,26 @@ Only return valid JSON, no other text."""
             score += 0  # Not our fit
         
         # Geographic Location Score (0-10 points)
-        location = company_data.get('location', '').lower()
+        location = company_data.get('location', '') or ''
+        location = location.lower() if location else ''
         us_states = ['california', 'massachusetts', 'new york', 'new jersey', 'pennsylvania',
                     'maryland', 'north carolina', 'texas', 'washington', 'usa', 'united states']
         eu_priority = ['germany', 'uk', 'united kingdom', 'france', 'netherlands', 'switzerland', 
                       'belgium', 'sweden', 'denmark']
         
-        if any(loc in location for loc in us_states):
+        if location and any(loc in location for loc in us_states):
             score += 10  # US - priority
-        elif any(loc in location for loc in eu_priority):
+        elif location and any(loc in location for loc in eu_priority):
             score += 10  # EU priority - priority
-        elif any(country in location for country in ['italy', 'spain', 'austria', 'ireland', 'norway', 'finland']):
+        elif location and any(country in location for country in ['italy', 'spain', 'austria', 'ireland', 'norway', 'finland']):
             score += 8  # Other Western Europe
-        elif 'poland' in location or 'czech' in location:
+        elif location and ('poland' in location or 'czech' in location):
             score += 6  # Eastern Europe
         
         # Funding Stage Score (already counted above in revenue)
         # Manufacturing Need Score (0-10 points)
-        manufacturing_status = company_data.get('manufacturing_status', '').lower()
+        manufacturing_status = company_data.get('manufacturing_status', '') or ''
+        manufacturing_status = manufacturing_status.lower() if manufacturing_status else ''
         if 'no public partner' in manufacturing_status:
             score += 10  # OPPORTUNITY
         elif 'has partner' in manufacturing_status:
@@ -364,16 +366,18 @@ Only return valid JSON, no other text."""
         bonuses = self.config['icp_scoring']['bonuses']
         
         # Location check (Europe)
-        location = company_data.get('location', '').lower()
+        location = company_data.get('location', '') or ''
+        location = location.lower() if location else ''
         european_countries = ['uk', 'germany', 'france', 'switzerland', 'netherlands', 
                             'belgium', 'italy', 'spain', 'sweden', 'denmark', 'ireland',
                             'austria', 'norway', 'finland', 'poland']
-        if any(country in location for country in european_countries):
+        if location and any(country in location for country in european_countries):
             score += criteria['location_europe']
         
         # Funding stage
-        funding_stage = company_data.get('funding_stage', '').lower()
-        if any(stage in funding_stage for stage in ['series b', 'series c', 'series d', 'public']):
+        funding_stage = company_data.get('funding_stage', '') or ''
+        funding_stage = funding_stage.lower() if funding_stage else ''
+        if funding_stage and any(stage in funding_stage for stage in ['series b', 'series c', 'series d', 'public']):
             score += criteria['funding_series_b_plus']
         
         # Pipeline stage
@@ -387,8 +391,9 @@ Only return valid JSON, no other text."""
             score += criteria['mammalian_platform']
         
         # CDMO partnership status
-        manufacturing_status = company_data.get('manufacturing_status', '').lower()
-        if 'no public partner' in manufacturing_status:
+        manufacturing_status = company_data.get('manufacturing_status', '') or ''
+        manufacturing_status = manufacturing_status.lower() if manufacturing_status else ''
+        if manufacturing_status and 'no public partner' in manufacturing_status:
             score += criteria['no_cdmo_partner']
         
         # Bonuses
@@ -414,20 +419,21 @@ Only return valid JSON, no other text."""
         criteria = self.config['urgency_scoring']['criteria']
         
         # Recent funding (simplified - would need proper date parsing)
-        latest_funding = company_data.get('latest_funding_round', '')
-        if '2024' in latest_funding or '2025' in latest_funding:
+        latest_funding = company_data.get('latest_funding_round', '') or ''
+        if latest_funding and ('2024' in latest_funding or '2025' in latest_funding):
             score += criteria['recent_funding_6mo']
         
         # Check intelligence notes for key indicators
-        notes = company_data.get('intelligence_notes', '').lower()
+        notes = company_data.get('intelligence_notes', '') or ''
+        notes = notes.lower() if notes else ''
         
-        if any(word in notes for word in ['phase 2', 'phase 3', 'advancing', 'clinical trial']):
+        if notes and any(word in notes for word in ['phase 2', 'phase 3', 'advancing', 'clinical trial']):
             score += criteria['advancing_phase']
         
-        if any(word in notes for word in ['cmo', 'coo', 'chief operating', 'head of operations']):
+        if notes and any(word in notes for word in ['cmo', 'coo', 'chief operating', 'head of operations']):
             score += criteria['new_cmo_coo_hire']
         
-        if any(word in notes for word in ['manufacturing', 'cdmo', 'cmo', 'production', 'scale-up']):
+        if notes and any(word in notes for word in ['manufacturing', 'cdmo', 'cmo', 'production', 'scale-up']):
             score += criteria['manufacturing_mentioned']
         
         return min(score, 100)  # Cap at 100
