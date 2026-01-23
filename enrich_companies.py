@@ -82,14 +82,15 @@ class CompanyEnricher:
             return value
         
         # Case-insensitive match
-        value_lower = value.lower()
-        for option in valid_options:
-            if option.lower() == value_lower:
-                return option
+        value_lower = value.lower() if value else None
+        if value_lower:
+            for option in valid_options:
+                if option and option.lower() == value_lower:
+                    return option
         
         # Fuzzy match (contains)
         for option in valid_options:
-            if value_lower in option.lower() or option.lower() in value_lower:
+            if option and value_lower and (value_lower in option.lower() or option.lower() in value_lower):
                 logger.warning(f"Fuzzy matched '{value}' to '{option}'")
                 return option
         
