@@ -1,0 +1,63 @@
+name: Monitor Lead Activity
+
+on:
+  # Run every 2 weeks on Monday at 9 AM
+  schedule:
+    - cron: '0 9 * * 1/2'
+  
+  # Also allow manual trigger
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max number of leads to monitor (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Monitor lead activity
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        LIMIT="${{ github.event.inputs.limit }}"
+        
+        if [ -n "$LIMIT" ]; then
+          echo "Monitoring $LIMIT leads..."
+          python monitor_leads.py --limit $LIMIT
+        else
+          echo "Monitoring all marked leads..."
+          python monitor_leads.py
+        fi
+    
+    - name: Upload surveillance log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: surveillance-log
+        path: surveillance.log
+        retention-days: 90
