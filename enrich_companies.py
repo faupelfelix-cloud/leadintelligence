@@ -263,6 +263,179 @@ Only return valid JSON, no other text."""
         else:
             return self.calculate_icp_score_basic(company_data)
     
+    def calculate_icp_score_with_justification(self, company_data: Dict) -> tuple:
+        """Calculate ICP score and return (score, justification_text)"""
+        
+        if self.has_strategic_tables:
+            return self.calculate_icp_score_strategic_with_justification(company_data)
+        else:
+            score = self.calculate_icp_score_basic(company_data)
+            return (score, "Basic ICP scoring (no strategic tables)")
+    
+    def calculate_icp_score_strategic_with_justification(self, company_data: Dict) -> tuple:
+        """Calculate ICP score using strategic criteria and provide justification"""
+        score = 0
+        max_score = 105
+        justification = []
+        
+        # Company Size Score (0-15 points)
+        company_size = company_data.get('company_size', '')
+        size_score = 0
+        if '51-200' in company_size or '201-500' in company_size:
+            size_score = 15
+            justification.append(f"✓ Company Size: {company_size} (+15 pts - PERFECT FIT)")
+        elif '501-1000' in company_size:
+            size_score = 15
+            justification.append(f"✓ Company Size: {company_size} (+15 pts - PERFECT FIT)")
+        elif '1000+' in company_size:
+            size_score = 3
+            justification.append(f"✗ Company Size: {company_size} (+3 pts - too large)")
+        elif '11-50' in company_size:
+            size_score = 3
+            justification.append(f"○ Company Size: {company_size} (+3 pts - startup)")
+        elif '1-10' in company_size:
+            size_score = 1
+            justification.append(f"✗ Company Size: {company_size} (+1 pt - too small)")
+        else:
+            justification.append(f"○ Company Size: Unknown (+0 pts)")
+        score += size_score
+        
+        # Funding Stage Score (0-15 points)
+        funding = company_data.get('funding_stage', '').lower()
+        funding_score = 0
+        if 'series c' in funding or 'public' in funding:
+            funding_score = 15
+            justification.append(f"✓ Funding: {funding.title()} (+15 pts - well funded)")
+        elif 'series b' in funding:
+            funding_score = 7
+            justification.append(f"○ Funding: {funding.title()} (+7 pts)")
+        elif 'series a' in funding:
+            funding_score = 3
+            justification.append(f"○ Funding: {funding.title()} (+3 pts - early)")
+        else:
+            justification.append(f"○ Funding: {funding.title() if funding else 'Unknown'} (+0 pts)")
+        score += funding_score
+        
+        # Pipeline Stage Score (0-20 points)
+        pipeline_stages = [s.lower() for s in company_data.get('pipeline_stages', [])]
+        pipeline_score = 0
+        if 'phase 2' in pipeline_stages or 'phase 3' in pipeline_stages:
+            pipeline_score = 20
+            justification.append(f"✓ Pipeline: Phase 2/3 programs (+20 pts - PERFECT)")
+        elif 'commercial' in pipeline_stages:
+            pipeline_score = 15
+            justification.append(f"✓ Pipeline: Commercial products (+15 pts)")
+        elif 'phase 1' in pipeline_stages:
+            pipeline_score = 10
+            justification.append(f"○ Pipeline: Phase 1 (+10 pts)")
+        elif 'preclinical' in pipeline_stages:
+            pipeline_score = 5
+            justification.append(f"○ Pipeline: Preclinical (+5 pts - early)")
+        else:
+            justification.append(f"○ Pipeline: Unknown (+0 pts)")
+        score += pipeline_score
+        
+        # Technology Platform Score (0-20 points) - CRITICAL
+        platforms = [p.lower() for p in company_data.get('technology_platforms', [])]
+        focus_areas = [f.lower() for f in company_data.get('focus_areas', [])]
+        
+        mammalian_keywords = ['mammalian', 'cho', 'mab', 'monoclonal', 'bispecific', 'adc', 'antibody']
+        non_mammalian_keywords = ['cell therapy', 'gene therapy', 'viral', 'mrna', 'oligo', 'vaccine']
+        
+        combined = str(platforms + focus_areas).lower()
+        has_mammalian = any(kw in combined for kw in mammalian_keywords)
+        has_non_mammalian = any(kw in combined for kw in non_mammalian_keywords)
+        
+        tech_score = 0
+        if has_mammalian and not has_non_mammalian:
+            tech_score = 20
+            justification.append(f"✓ Technology: Purely mammalian (+20 pts - PERFECT FIT)")
+        elif has_mammalian and has_non_mammalian:
+            tech_score = 12
+            justification.append(f"○ Technology: Mixed mammalian + other (+12 pts)")
+        elif has_non_mammalian:
+            tech_score = 0
+            justification.append(f"✗ Technology: Non-mammalian focus (+0 pts - NOT FIT)")
+        else:
+            justification.append(f"○ Technology: Unknown (+0 pts)")
+        score += tech_score
+        
+        # Geographic Location Score (0-10 points)
+        location = company_data.get('location', '') or ''
+        location = location.lower() if location else ''
+        geo_score = 0
+        
+        us_states = ['california', 'massachusetts', 'new york', 'new jersey', 'pennsylvania',
+                    'maryland', 'north carolina', 'texas', 'washington', 'usa', 'united states']
+        eu_priority = ['germany', 'uk', 'united kingdom', 'france', 'netherlands', 'switzerland', 
+                      'belgium', 'sweden', 'denmark']
+        
+        if location and any(loc in location for loc in us_states):
+            geo_score = 10
+            justification.append(f"✓ Location: US (+10 pts - priority market)")
+        elif location and any(loc in location for loc in eu_priority):
+            geo_score = 10
+            justification.append(f"✓ Location: EU priority ({location.title()}) (+10 pts)")
+        elif location and any(country in location for country in ['italy', 'spain', 'austria', 'ireland', 'norway', 'finland']):
+            geo_score = 8
+            justification.append(f"○ Location: Western Europe (+8 pts)")
+        elif location and ('poland' in location or 'czech' in location):
+            geo_score = 6
+            justification.append(f"○ Location: Eastern Europe (+6 pts)")
+        else:
+            justification.append(f"○ Location: {location.title() if location else 'Unknown'} (+0 pts)")
+        score += geo_score
+        
+        # Manufacturing Need Score (0-10 points)
+        manufacturing_status = company_data.get('manufacturing_status', '') or ''
+        manufacturing_status = manufacturing_status.lower() if manufacturing_status else ''
+        mfg_score = 0
+        
+        if manufacturing_status and 'no public partner' in manufacturing_status:
+            mfg_score = 10
+            justification.append(f"✓ Manufacturing: No public CDMO (+10 pts - OPPORTUNITY)")
+        elif manufacturing_status and 'has partner' in manufacturing_status:
+            mfg_score = 8
+            justification.append(f"○ Manufacturing: Has partner (+8 pts)")
+        elif manufacturing_status and 'building in-house' in manufacturing_status:
+            mfg_score = 3
+            justification.append(f"○ Manufacturing: Building in-house (+3 pts)")
+        else:
+            mfg_score = 5
+            justification.append(f"○ Manufacturing: Unknown (+5 pts)")
+        score += mfg_score
+        
+        # Product Type Score (0-5 points)
+        focus = str(focus_areas).lower()
+        product_score = 0
+        if 'bispecific' in focus or 'adc' in focus:
+            product_score = 5
+            justification.append(f"✓ Product: Bispecifics/ADCs (+5 pts - our specialty)")
+        elif 'mab' in focus or 'antibod' in focus:
+            product_score = 5
+            justification.append(f"✓ Product: Antibodies (+5 pts)")
+        else:
+            justification.append(f"○ Product: Other/Unknown (+0 pts)")
+        score += product_score
+        
+        # Final summary
+        final_score = min(score, max_score)
+        justification_text = "\n".join(justification)
+        justification_text += f"\n\nTOTAL: {final_score}/{max_score} points"
+        
+        if final_score >= 90:
+            justification_text += "\n→ PERFECT FIT (Tier 1)"
+        elif final_score >= 75:
+            justification_text += "\n→ STRONG FIT (Tier 2)"
+        elif final_score >= 60:
+            justification_text += "\n→ GOOD FIT (Tier 3)"
+        elif final_score >= 40:
+            justification_text += "\n→ ACCEPTABLE FIT (Tier 4)"
+        else:
+            justification_text += "\n→ POOR FIT (Tier 5)"
+        
+        return (final_score, justification_text)
+    
     def calculate_icp_score_strategic(self, company_data: Dict) -> int:
         """Calculate ICP score using Company Profile and ICP Scoring Criteria tables"""
         score = 0
@@ -441,8 +614,8 @@ Only return valid JSON, no other text."""
     def update_company_record(self, record_id: str, enriched_data: Dict):
         """Update Airtable company record with enriched data"""
         
-        # Calculate scores
-        icp_score = self.calculate_icp_score(enriched_data)
+        # Calculate scores with justification
+        icp_score, icp_justification = self.calculate_icp_score_with_justification(enriched_data)
         urgency_score = self.calculate_urgency_score(enriched_data)
         
         # Prepare update payload
@@ -450,6 +623,7 @@ Only return valid JSON, no other text."""
             'Enrichment Status': 'Enriched' if enriched_data.get('confidence') != 'Failed' else 'Failed',
             'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d'),  # Airtable date format
             'ICP Fit Score': icp_score,
+            'ICP Score Justification': icp_justification,
             'Urgency Score': urgency_score
         }
         
