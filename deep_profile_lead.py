@@ -8,6 +8,7 @@ import os
 import sys
 import yaml
 import json
+import re
 import logging
 from datetime import datetime
 from typing import Dict, Optional
@@ -305,23 +306,47 @@ Only return valid JSON, no other text."""
                 if block.type == "text":
                     result_text += block.text
             
-            # Parse JSON
+            # Parse JSON with robust cleaning
             result_text = result_text.strip()
+            
+            # Remove markdown code blocks
             if result_text.startswith("```json"):
                 result_text = result_text[7:]
-            if result_text.startswith("```"):
+            elif result_text.startswith("```"):
                 result_text = result_text[3:]
+            
             if result_text.endswith("```"):
                 result_text = result_text[:-3]
             
-            profile_data = json.loads(result_text.strip())
-            logger.info(f"  ✓ Deep profile generated successfully")
-            return profile_data
+            result_text = result_text.strip()
             
-        except Exception as e:
-            logger.error(f"  ✗ Error generating profile: {str(e)}")
+            # Try to find JSON if there's preamble text
+            if not result_text.startswith("{"):
+                # Look for first { and last }
+                start_idx = result_text.find("{")
+                end_idx = result_text.rfind("}")
+                if start_idx != -1 and end_idx != -1:
+                    result_text = result_text[start_idx:end_idx+1]
+            
+            # Remove any trailing commas before closing braces (common JSON error)
+            import re
+            result_text = re.sub(r',(\s*[}\]])', r'\1', result_text)
+            
+            try:
+                profile_data = json.loads(result_text)
+                logger.info(f"  ✓ Deep profile generated successfully")
+                return profile_data
+            except json.JSONDecodeError as json_err:
+                # Log the problematic JSON for debugging
+                logger.error(f"  ✗ JSON parsing failed: {str(json_err)}")
+                logger.error(f"  First 200 chars of response: {result_text[:200]}")
+                logger.error(f"  Last 200 chars of response: {result_text[-200:]}")
+                raise
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"  ✗ Error generating profile (JSON parse error): {str(e)}")
             return {
-                "error": str(e),
+                "error": f"JSON parsing failed: {str(e)}",
                 "metadata": {
                     "confidence_level": "Failed",
                     "last_updated": datetime.now().strftime('%Y-%m-%d')
