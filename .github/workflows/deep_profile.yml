@@ -1,0 +1,79 @@
+name: Deep Profile Leads
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Profiling mode'
+        required: true
+        type: choice
+        options:
+          - 'Auto: All marked leads (checkbox)'
+          - 'Manual: Enter lead name'
+      lead_name:
+        description: 'Lead name (only for manual mode)'
+        required: false
+        type: string
+      limit:
+        description: 'Max number of leads to profile (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Run deep profiling
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        MODE="${{ github.event.inputs.mode }}"
+        LEAD_NAME="${{ github.event.inputs.lead_name }}"
+        LIMIT="${{ github.event.inputs.limit }}"
+        
+        if [[ "$MODE" == "Manual: Enter lead name" ]]; then
+          if [ -z "$LEAD_NAME" ]; then
+            echo "Error: Lead name required for manual mode"
+            exit 1
+          fi
+          echo "Manual mode: Profiling $LEAD_NAME"
+          python deep_profile_lead.py --lead "$LEAD_NAME"
+        else
+          echo "Auto mode: Profiling all leads marked with 'Deep Profile' checkbox"
+          if [ -n "$LIMIT" ]; then
+            python deep_profile_lead.py --auto --limit $LIMIT
+          else
+            python deep_profile_lead.py --auto
+          fi
+        fi
+    
+    - name: Upload profile log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: deep-profile-log
+        path: deep_profile.log
+        retention-days: 30
