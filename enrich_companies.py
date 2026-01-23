@@ -52,6 +52,18 @@ class CompanyEnricher:
         self.companies_table = self.base.table(self.config['airtable']['tables']['companies'])
         self.intelligence_table = self.base.table(self.config['airtable']['tables']['intelligence_log'])
         
+        # Try to access Company Profile and ICP Scoring tables (optional but recommended)
+        try:
+            self.company_profile_table = self.base.table('Company Profile')
+            self.icp_scoring_table = self.base.table('ICP Scoring Criteria')
+            self.has_strategic_tables = True
+            logger.info("✓ Company Profile and ICP Scoring tables found")
+        except:
+            self.company_profile_table = None
+            self.icp_scoring_table = None
+            self.has_strategic_tables = False
+            logger.info("Note: Company Profile/ICP Scoring tables not found - using basic scoring")
+        
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
         )
@@ -243,7 +255,109 @@ Only return valid JSON, no other text."""
             }
     
     def calculate_icp_score(self, company_data: Dict) -> int:
-        """Calculate ICP Fit Score based on criteria"""
+        """Calculate ICP Fit Score based on criteria from ICP Scoring table or fallback"""
+        
+        if self.has_strategic_tables:
+            return self.calculate_icp_score_strategic(company_data)
+        else:
+            return self.calculate_icp_score_basic(company_data)
+    
+    def calculate_icp_score_strategic(self, company_data: Dict) -> int:
+        """Calculate ICP score using Company Profile and ICP Scoring Criteria tables"""
+        score = 0
+        max_score = 105  # Total possible from all criteria
+        
+        # Company Size Score (0-15 points)
+        company_size = company_data.get('company_size', '')
+        if '51-200' in company_size or '201-500' in company_size:
+            score += 15  # Lower mid-size - PERFECT
+        elif '501-1000' in company_size:
+            score += 15  # Upper mid-size - PERFECT
+        elif '1000+' in company_size:
+            score += 3  # Large - low priority
+        elif '11-50' in company_size:
+            score += 3  # Startup - low priority
+        elif '1-10' in company_size:
+            score += 1  # Too small
+        
+        # Revenue Score (0-15 points) - estimated from company size + funding
+        funding = company_data.get('funding_stage', '').lower()
+        if 'series b' in funding:
+            score += 7
+        elif 'series c' in funding or 'public' in funding:
+            score += 15  # Has capital
+        elif 'series a' in funding:
+            score += 3
+        
+        # Pipeline Stage Score (0-20 points)
+        pipeline_stages = [s.lower() for s in company_data.get('pipeline_stages', [])]
+        if ('phase 2' in pipeline_stages or 'phase 3' in pipeline_stages):
+            score += 20  # Clinical stage - PERFECT
+        elif 'commercial' in pipeline_stages:
+            score += 15  # Commercial - good
+        elif 'phase 1' in pipeline_stages:
+            score += 10
+        elif 'preclinical' in pipeline_stages:
+            score += 5
+        
+        # Technology Platform Score (0-20 points) - CRITICAL
+        platforms = [p.lower() for p in company_data.get('technology_platforms', [])]
+        focus_areas = [f.lower() for f in company_data.get('focus_areas', [])]
+        
+        # Check if purely mammalian
+        mammalian_keywords = ['mammalian', 'cho', 'mab', 'monoclonal', 'bispecific', 'adc', 'antibody']
+        non_mammalian_keywords = ['cell therapy', 'gene therapy', 'viral', 'mrna', 'oligo', 'vaccine']
+        
+        has_mammalian = any(kw in str(platforms + focus_areas).lower() for kw in mammalian_keywords)
+        has_non_mammalian = any(kw in str(platforms + focus_areas).lower() for kw in non_mammalian_keywords)
+        
+        if has_mammalian and not has_non_mammalian:
+            score += 20  # Purely mammalian - PERFECT FIT
+        elif has_mammalian and has_non_mammalian:
+            score += 12  # Mixed - acceptable
+        elif has_non_mammalian:
+            score += 0  # Not our fit
+        
+        # Geographic Location Score (0-10 points)
+        location = company_data.get('location', '').lower()
+        us_states = ['california', 'massachusetts', 'new york', 'new jersey', 'pennsylvania',
+                    'maryland', 'north carolina', 'texas', 'washington', 'usa', 'united states']
+        eu_priority = ['germany', 'uk', 'united kingdom', 'france', 'netherlands', 'switzerland', 
+                      'belgium', 'sweden', 'denmark']
+        
+        if any(loc in location for loc in us_states):
+            score += 10  # US - priority
+        elif any(loc in location for loc in eu_priority):
+            score += 10  # EU priority - priority
+        elif any(country in location for country in ['italy', 'spain', 'austria', 'ireland', 'norway', 'finland']):
+            score += 8  # Other Western Europe
+        elif 'poland' in location or 'czech' in location:
+            score += 6  # Eastern Europe
+        
+        # Funding Stage Score (already counted above in revenue)
+        # Manufacturing Need Score (0-10 points)
+        manufacturing_status = company_data.get('manufacturing_status', '').lower()
+        if 'no public partner' in manufacturing_status:
+            score += 10  # OPPORTUNITY
+        elif 'has partner' in manufacturing_status:
+            score += 8  # Looking for alternatives
+        elif 'building in-house' in manufacturing_status:
+            score += 3  # Less immediate need
+        else:
+            score += 5  # Unknown
+        
+        # Product Type Score (0-5 points)
+        # Already partially covered in technology platform
+        focus = str(focus_areas).lower()
+        if 'bispecific' in focus or 'adc' in focus:
+            score += 5  # Our specialties
+        elif 'mab' in focus or 'antibod' in focus:
+            score += 5
+        
+        return min(score, max_score)
+    
+    def calculate_icp_score_basic(self, company_data: Dict) -> int:
+        """Fallback basic ICP calculation if strategic tables not available"""
         score = 0
         criteria = self.config['icp_scoring']['criteria']
         bonuses = self.config['icp_scoring']['bonuses']
