@@ -84,10 +84,26 @@ class LeadEnricher:
 Find and verify the following information:
 
 CONTACT INFORMATION:
-- Professional email address (look for: company website team page, press releases, conference speaker lists, published papers)
+- Professional email address - CRITICAL: Put maximum effort into finding this
+  * Search company website thoroughly: team page, about us, contact page, leadership bios
+  * Check press releases and news articles (often quote emails)
+  * Look for conference speaker lists (usually include contact info)
+  * Search for published papers, patents, posters (author contact emails)
+  * Check LinkedIn "Contact Info" section (sometimes public)
+  * Search "[name] [company] email" directly
+  * Look for university/previous company emails if recently moved
+  * If not found: Research company email pattern from OTHER employees (firstname.lastname@company.com, flastname@company.com, etc.) and suggest pattern
+  * Try tools like RocketReach, Hunter.io results if they appear in search
 - Current job title (verify it's current, not outdated)
 - LinkedIn profile URL (ensure it's the correct person)
 - X (Twitter) profile URL (if they have one - look for verified account or bio mentioning their company/role)
+
+EMAIL FINDING PRIORITY:
+This is the MOST IMPORTANT field. Spend extra search effort finding the email.
+- Search at least 5-10 different sources for email
+- Try multiple search queries with variations
+- If you find company email pattern, suggest it with "Pattern Suggested" confidence
+- Example patterns: firstname.lastname@company.com, f.lastname@company.com, firstnamel@company.com
 
 IMPORTANT GUIDELINES:
 - For email: Only provide if found on official sources. If not found, suggest likely pattern based on company email format if you can identify it, but mark as "needs verification"
