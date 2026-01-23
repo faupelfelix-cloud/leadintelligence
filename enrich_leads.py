@@ -87,11 +87,13 @@ CONTACT INFORMATION:
 - Professional email address (look for: company website team page, press releases, conference speaker lists, published papers)
 - Current job title (verify it's current, not outdated)
 - LinkedIn profile URL (ensure it's the correct person)
+- X (Twitter) profile URL (if they have one - look for verified account or bio mentioning their company/role)
 
 IMPORTANT GUIDELINES:
 - For email: Only provide if found on official sources. If not found, suggest likely pattern based on company email format if you can identify it, but mark as "needs verification"
 - For title: Make sure it's their CURRENT title, not a previous role
 - For LinkedIn: Verify it's the right person by cross-referencing company and location
+- For X profile: Format as full URL (https://x.com/username or https://twitter.com/username). Only include if confident it's the right person
 - Prioritize recent, official sources (last 12 months)
 
 Return your findings in this exact JSON format:
@@ -105,6 +107,9 @@ Return your findings in this exact JSON format:
   "linkedin_url": "LinkedIn URL or null",
   "linkedin_confidence": "High/Medium/Low",
   "linkedin_source": "source description or null",
+  "x_profile": "https://x.com/username or null",
+  "x_confidence": "High/Medium/Low",
+  "x_source": "source description or null",
   "recent_activity": "Any recent news, posts, or mentions (optional)",
   "last_updated": "Date of most recent information found",
   "sources": ["url1", "url2"],
@@ -212,6 +217,17 @@ Only return the JSON, no other text."""
                 notes_parts.append(f"LinkedIn: Verified (Confidence: {linkedin_conf})")
             else:
                 logger.warning(f"Invalid LinkedIn URL: {linkedin_url}")
+        
+        # Add X (Twitter) profile with URL validation
+        if enriched_data.get('x_profile'):
+            x_profile = enriched_data['x_profile'].strip()
+            # Basic X/Twitter URL validation
+            if 'x.com' in x_profile.lower() or 'twitter.com' in x_profile.lower():
+                update_fields['X Profile'] = x_profile
+                x_conf = enriched_data.get('x_confidence', 'Unknown')
+                notes_parts.append(f"X Profile: Found (Confidence: {x_conf})")
+            else:
+                logger.warning(f"Invalid X profile URL: {x_profile}")
         
         # Add recent activity if available
         if enriched_data.get('recent_activity'):

@@ -1,0 +1,64 @@
+name: Auto-Link Leads to Companies
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Linking mode'
+        required: true
+        type: choice
+        options:
+          - 'Link and create companies (recommended)'
+          - 'Link only (no new companies)'
+          - 'Dry run (preview only)'
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Auto-link leads
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+      run: |
+        MODE="${{ github.event.inputs.mode }}"
+        
+        if [[ "$MODE" == "Link and create companies (recommended)" ]]; then
+          echo "Linking leads and creating new companies as needed..."
+          python auto_link_leads.py
+        elif [[ "$MODE" == "Link only (no new companies)" ]]; then
+          echo "Linking leads to existing companies only..."
+          python auto_link_leads.py --no-create
+        else
+          echo "DRY RUN: Previewing what would happen..."
+          python auto_link_leads.py --dry-run
+        fi
+    
+    - name: Upload linking log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-link-log
+        path: auto_link.log
+        retention-days: 30

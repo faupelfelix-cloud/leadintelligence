@@ -49,45 +49,46 @@ jobs:
         AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       run: |
-        case "${{ github.event.inputs.task }}" in
-          "Test (5 companies)")
-            echo "Running test with 5 companies..."
-            python enrich_companies.py --limit 5
-            ;;
-          "Enrich Companies")
-            if [ -n "${{ github.event.inputs.limit }}" ]; then
-              echo "Enriching companies (limit: ${{ github.event.inputs.limit }})..."
-              python enrich_companies.py --limit ${{ github.event.inputs.limit }}
-            else
-              echo "Enriching all companies..."
-              python enrich_companies.py
-            fi
-            ;;
-          "Enrich Leads")
-            if [ -n "${{ github.event.inputs.limit }}" ]; then
-              echo "Enriching leads (limit: ${{ github.event.inputs.limit }})..."
-              python enrich_leads.py --limit ${{ github.event.inputs.limit }}
-            else
-              echo "Enriching all leads..."
-              python enrich_leads.py
-            fi
-            ;;
-          "Enrich Both (Companies + Leads)")
-            if [ -n "${{ github.event.inputs.limit }}" ]; then
-              echo "Enriching companies and leads (limit: ${{ github.event.inputs.limit }} each)..."
-              python enrich_companies.py --limit ${{ github.event.inputs.limit }}
-              python enrich_leads.py --limit ${{ github.event.inputs.limit }}
-            else
-              echo "Enriching all companies and leads..."
-              python enrich_companies.py
-              python enrich_leads.py
-            fi
-            ;;
-          "Validate Setup Only")
-            echo "Validating setup..."
-            python validate_setup.py
-            ;;
-        esac
+        TASK="${{ github.event.inputs.task }}"
+        LIMIT="${{ github.event.inputs.limit }}"
+        
+        if [ "$TASK" = "Test (5 companies)" ]; then
+          echo "Running test with 5 companies..."
+          python enrich_companies.py --limit 5
+          
+        elif [ "$TASK" = "Enrich Companies" ]; then
+          if [ -n "$LIMIT" ]; then
+            echo "Enriching companies (limit: $LIMIT)..."
+            python enrich_companies.py --limit $LIMIT
+          else
+            echo "Enriching all companies..."
+            python enrich_companies.py
+          fi
+          
+        elif [ "$TASK" = "Enrich Leads" ]; then
+          if [ -n "$LIMIT" ]; then
+            echo "Enriching leads (limit: $LIMIT)..."
+            python enrich_leads.py --limit $LIMIT
+          else
+            echo "Enriching all leads..."
+            python enrich_leads.py
+          fi
+          
+        elif [ "$TASK" = "Enrich Both (Companies + Leads)" ]; then
+          if [ -n "$LIMIT" ]; then
+            echo "Enriching companies and leads (limit: $LIMIT each)..."
+            python enrich_companies.py --limit $LIMIT
+            python enrich_leads.py --limit $LIMIT
+          else
+            echo "Enriching all companies and leads..."
+            python enrich_companies.py
+            python enrich_leads.py
+          fi
+          
+        elif [ "$TASK" = "Validate Setup Only" ]; then
+          echo "Validating setup..."
+          python validate_setup.py
+        fi
     
     - name: Upload enrichment log
       if: always()
