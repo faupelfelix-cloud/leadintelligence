@@ -42,11 +42,47 @@ class LeadSurveillance:
         self.companies_table = self.base.table(self.config['airtable']['tables']['companies'])
         self.trigger_history_table = self.base.table('Trigger History')
         
+        # Try to access Conferences table (optional)
+        try:
+            self.conferences_table = self.base.table('Conferences We Attend')
+            self.has_conference_table = True
+        except:
+            self.conferences_table = None
+            self.has_conference_table = False
+            logger.info("Note: 'Conferences We Attend' table not found - conference matching disabled")
+        
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
         )
         
         logger.info("LeadSurveillance initialized successfully")
+    
+    def get_our_conferences(self) -> str:
+        """Get list of conferences we're attending for matching"""
+        if not self.has_conference_table:
+            return ""
+        
+        try:
+            # Get all upcoming conferences
+            today = datetime.now().strftime('%Y-%m-%d')
+            formula = f"IS_AFTER({{Conference Date}}, '{today}')"
+            conferences = self.conferences_table.all(formula=formula)
+            
+            if not conferences:
+                return ""
+            
+            conf_list = []
+            for conf in conferences:
+                fields = conf['fields']
+                name = fields.get('Conference Name', '')
+                date = fields.get('Conference Date', '')
+                location = fields.get('Location', '')
+                conf_list.append(f"- {name} ({date}, {location})")
+            
+            return "CONFERENCES WE ARE ATTENDING:\n" + "\n".join(conf_list[:10])  # Max 10
+        except Exception as e:
+            logger.warning(f"Could not fetch conference list: {str(e)}")
+            return ""
     
     def get_leads_for_monitoring(self, limit: Optional[int] = None) -> List[Dict]:
         """Get all leads marked for surveillance monitoring"""
@@ -105,17 +141,31 @@ Company Context:
 - Recent Funding: {company_context.get('Latest Funding Round', 'Unknown')}
 """
         
+        # Add our conference list for matching
+        our_conferences = self.get_our_conferences()
+        if our_conferences:
+            context_info += f"\n{our_conferences}\n"
+            context_info += "PRIORITY: If this lead is attending any of OUR conferences, flag as HIGH priority trigger!\n"
+        
         surveillance_prompt = f"""You are a business intelligence analyst monitoring professional activity in the biologics/pharma industry.
 
 {context_info}
 
 Your mission: Monitor this lead's recent activity and identify relevant updates and trigger events for business development outreach.
 
-IMPORTANT DATE RULES:
+CRITICAL FILTERING RULES:
 - Today's date is: {datetime.now().strftime('%Y-%m-%d')}
-- Only report FUTURE conferences (starting today or later)
-- Only report triggers from the last 3 months maximum
-- Do NOT report past events or old news
+- ONLY report information from the last 30 days (since {(datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')})
+- ONLY report FUTURE conferences (starting today or later)
+- ONLY include mammalian cell culture biologics (mAbs, bispecific antibodies, ADCs, Fc-fusion proteins)
+- EXCLUDE: Cell therapy, gene therapy, viral vectors, plasmids, mRNA, oligonucleotides, vaccines
+- If in doubt about technology platform, CHECK the company's pipeline/technology
+
+DO NOT report:
+- News older than 30 days
+- Past conferences or events
+- Cell/gene therapy companies
+- Non-mammalian modalities
 
 SEARCH EXTENSIVELY for activity in the {period}:
 
