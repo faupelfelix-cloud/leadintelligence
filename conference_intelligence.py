@@ -308,25 +308,60 @@ Search and assess now."""
                 if block.type == "text":
                     result_text += block.text
             
-            # Parse JSON
-            result_text = result_text.strip()
-            if result_text.startswith("```json"):
-                result_text = result_text[7:]
-            elif result_text.startswith("```"):
-                result_text = result_text[3:]
-            if result_text.endswith("```"):
-                result_text = result_text[:-3]
+            # Parse JSON - handle multiple formats (same as search_conference_attendees)
             result_text = result_text.strip()
             
-            data = json.loads(result_text)
-            icp_score = data.get('icp_score', 0)
+            # Try to find JSON in the response
+            json_str = None
             
-            logger.info(f"    Quick ICP for {company_name}: {icp_score}")
-            return icp_score
+            # Method 1: Check for markdown code blocks
+            if "```json" in result_text:
+                start = result_text.find("```json") + 7
+                end = result_text.find("```", start)
+                if end > start:
+                    json_str = result_text[start:end].strip()
+            elif "```" in result_text:
+                start = result_text.find("```") + 3
+                end = result_text.find("```", start)
+                if end > start:
+                    json_str = result_text[start:end].strip()
             
-        except Exception as e:
-            logger.error(f"    Error assessing ICP for {company_name}: {str(e)}")
-            return 0
+            # Method 2: Try to find JSON object with curly braces
+            if not json_str and "{" in result_text:
+                start = result_text.find("{")
+                # Find the matching closing brace
+                depth = 0
+                end = start
+                for i in range(start, len(result_text)):
+                    if result_text[i] == "{":
+                        depth += 1
+                    elif result_text[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end > start:
+                    json_str = result_text[start:end].strip()
+            
+            # Method 3: Use entire text if it looks like JSON
+            if not json_str:
+                json_str = result_text
+            
+            # Parse the JSON
+            if not json_str:
+                logger.warning(f"    No JSON found in ICP response for {company_name}")
+                return 0
+            
+            try:
+                data = json.loads(json_str)
+                icp_score = data.get('icp_score', 0)
+                
+                logger.info(f"    Quick ICP for {company_name}: {icp_score}")
+                return icp_score
+            except json.JSONDecodeError as e:
+                logger.error(f"    JSON parse error for {company_name}: {str(e)}")
+                logger.debug(f"    Attempted to parse: {json_str[:150]}...")
+                return 0
     
     def find_company(self, company_name: str) -> Optional[Dict]:
         """Find company in Companies table"""
