@@ -362,6 +362,10 @@ Search and assess now."""
                 logger.error(f"    JSON parse error for {company_name}: {str(e)}")
                 logger.debug(f"    Attempted to parse: {json_str[:150]}...")
                 return 0
+            
+        except Exception as e:
+            logger.error(f"    Error assessing ICP for {company_name}: {str(e)}")
+            return 0
     
     def find_company(self, company_name: str) -> Optional[Dict]:
         """Find company in Companies table"""
