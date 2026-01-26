@@ -437,26 +437,29 @@ Search and assess now."""
                                   session_topic: str = None, source_url: str = None) -> bool:
         """Create CONFERENCE_ATTENDANCE trigger"""
         try:
-            details = f"""Conference: {conference_name}
-Date: {conference_date}
-Role: {role_at_conference}"""
-            
+            # Build description
+            description = f"Conference: {conference_name}\nRole: {role_at_conference}"
             if session_topic:
-                details += f"\nTopic: {session_topic}"
-            
+                description += f"\nTopic: {session_topic}"
             if source_url:
-                details += f"\nSource: {source_url}"
+                description += f"\nSource: {source_url}"
             
-            details += "\n\nDetected via Conference Intelligence System"
+            # Build outreach angle
+            outreach_angle = f"Attending/speaking at {conference_name}. Great opportunity to connect before or at the event."
+            
+            # Timing recommendation
+            timing = "Contact 2-4 weeks before conference to arrange meeting"
             
             trigger_data = {
+                'Date Detected': datetime.now().strftime('%Y-%m-%d'),
                 'Lead': [lead_id],
                 'Trigger Type': 'CONFERENCE_ATTENDANCE',
-                'Date Detected': datetime.now().strftime('%Y-%m-%d'),
-                'Status': 'New',
-                'Trigger Details': details,
-                'Confidence Score': 95,
-                'Priority': 'High'
+                'Urgency': 'HIGH',
+                'Description': description,
+                'Outreach Angle': outreach_angle,
+                'Timing Recommendation': timing,
+                'Event Date': conference_date,
+                'Status': 'New'
             }
             
             self.trigger_history_table.create(trigger_data)
