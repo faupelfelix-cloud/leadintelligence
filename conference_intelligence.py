@@ -202,11 +202,6 @@ Return results in this JSON format:
 IMPORTANT: Return ONLY the JSON, no additional text before or after.
 
 Search thoroughly across all sources and return all relevant people you find."""
-- Confidence level (High/Medium/Low)
-
-IMPORTANT: Return ONLY the JSON, no additional text before or after.
-
-Search thoroughly across all sources and return all relevant people you find."""
 
         try:
             logger.info(f"  Searching for attendees at {conference_name}...")
@@ -380,12 +375,12 @@ CRITICAL EXCLUSIONS - Automatic ICP 0 (DO NOT partner with):
 - Pure service providers (CROs without manufacturing needs)
 
 IDEAL CUSTOMERS - High ICP (75-100):
-✓ Biosimilar developers (we have biosimilar expertise!)
-✓ Mid-size biotechs (50-1000 employees) with biologics programs
-✓ Pharma companies with biologics pipelines (any size if biologics focus)
-✓ Biotechs in Phase 2/3 or commercial stage
-✓ Companies with mAbs, bispecifics, ADCs, fusion proteins
-✓ European companies (preferred but not required)
+- Biosimilar developers (we have biosimilar expertise!)
+- Mid-size biotechs (50-1000 employees) with biologics programs
+- Pharma companies with biologics pipelines (any size if biologics focus)
+- Biotechs in Phase 2/3 or commercial stage
+- Companies with mAbs, bispecifics, ADCs, fusion proteins
+- European companies (preferred but not required)
 
 SCORING CRITERIA (0-100):
 
