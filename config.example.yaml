@@ -12,6 +12,8 @@ airtable:
     leads: "Leads"
     intelligence_log: "Intelligence Log"
     enrichment_queue: "Enrichment Queue"
+    trigger_history: "Trigger History"
+    conferences: "Conferences We Attend"  # Your conference tracking table
 
 # Anthropic API Configuration
 anthropic:
