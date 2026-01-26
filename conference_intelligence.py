@@ -386,8 +386,7 @@ Search and assess now."""
             company_data = {
                 'Company Name': company_name,
                 'ICP Fit Score': icp_score,
-                'Source': 'Conference Intelligence',
-                'Status': 'Not Enriched'
+                'Enrichment Status': 'Not Enriched'
             }
             
             record = self.companies_table.create(company_data)
@@ -417,11 +416,11 @@ Search and assess now."""
     def create_lead(self, name: str, title: str, company_id: str, source: str) -> Dict:
         """Create a new lead record"""
         try:
+            # Required fields
             lead_data = {
                 'Lead Name': name,
                 'Title': title,
                 'Company': [company_id],
-                'Source': source,
                 'Enrichment Status': 'Not Enriched',
                 'Intelligence Notes': f"Discovered via Conference Intelligence\nSource: {source}"
             }
