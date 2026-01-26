@@ -228,9 +228,33 @@ ICP SCORING CRITERIA (Use these EXACT rules to score):
         
         prompt += f"""TOTAL POSSIBLE SCORE: {self.get_total_score()} points
 
-CRITICAL: Check if CDMO/CMO competitor first!
-Known competitors: Lonza, Samsung Biologics, Fujifilm Diosynth, Thermo Fisher Biologics, WuXi, Catalent Biologics, etc.
-→ If CDMO competitor: Automatic score = 0
+CRITICAL INSTRUCTIONS FOR SCORING:
+
+1. CDMO COMPETITOR DETECTION (be precise!):
+   - ONLY mark as CDMO competitor if company's PRIMARY business is contract manufacturing
+   - Pure CDMOs (mark as competitor): Lonza, Samsung Biologics, Fujifilm Diosynth, WuXi Biologics, Catalent, AGC Biologics, Boehringer Ingelheim BioXcellence
+   - NOT CDMOs (do NOT mark as competitor):
+     * Pharma companies with CDMO divisions (Pfizer, Merck, etc.) - these are CUSTOMERS
+     * Companies that do some contract work but primarily develop their own products
+   - When in doubt, do NOT mark as CDMO competitor
+
+2. BIG PHARMA HANDLING:
+   - Big pharma (Sanofi, Pfizer, AstraZeneca, Roche, Novartis, MSD, Daiichi, Astellas, etc.) are POTENTIAL CUSTOMERS
+   - They may score lower on size/revenue criteria (that's OK)
+   - They should still get points for technology, product focus, geography, etc.
+   - NEVER mark big pharma as CDMO competitor
+
+3. ADC/BIOTECH COMPANIES:
+   - ADC companies (Tubulis, Mersana, ADC Therapeutics, etc.) = HIGH PRIORITY
+   - Biosimilar companies (Sandoz, Formycon, etc.) = HIGH PRIORITY
+   - mAb-focused biotechs = HIGH PRIORITY
+   - These should score high on technology (20 pts) and product focus (5 pts)
+
+4. SCORING GUIDANCE:
+   - Apply each criterion independently based on the rules
+   - Don't give 0 just because company is large - use the actual criteria
+   - A large pharma with biologics might score 40-60 (lower but still valid)
+   - A mid-size ADC biotech should score 80-100
 
 Search for {company_name} and assess using the criteria above.
 
@@ -248,6 +272,7 @@ Return JSON with scores for each criterion:
     "product_focus": "NBE/Biosimilar/etc"
   }},
   "is_cdmo_competitor": false,
+  "is_big_pharma": false,
   "scores": {{
     "company_size": {{"value": "50-300", "points": 15}},
     "annual_revenue": {{"value": "$20M-$100M", "points": 15}},
@@ -259,7 +284,7 @@ Return JSON with scores for each criterion:
     "product_focus": {{"value": "NBEs", "points": 5}}
   }},
   "total_score": X,
-  "tier": "Perfect Fit / Strong Fit / etc",
+  "tier": "Perfect Fit / Strong Fit / Acceptable / Low Priority",
   "reasoning": "Brief explanation of why this score"
 }}
 
@@ -340,7 +365,8 @@ Search and assess now."""
                 'reasoning': data.get('reasoning', ''),
                 'company_info': data.get('company_info', {}),
                 'scores': data.get('scores', {}),
-                'is_competitor': False
+                'is_competitor': False,
+                'is_big_pharma': data.get('is_big_pharma', False)
             }
             
             return total_score, breakdown
