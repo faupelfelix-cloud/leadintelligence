@@ -263,6 +263,52 @@ Search thoroughly and return all relevant people you find."""
             logger.error(f"  ✗ Error searching for attendees: {str(e)}")
             return []
     
+    def quick_company_icp_with_pharma_flag(self, company_name: str) -> tuple:
+        """
+        Quick ICP assessment that also returns whether company is big pharma
+        Returns: (icp_score, is_big_pharma)
+        """
+        
+        # Use dynamic scorer if available
+        if self.icp_scorer:
+            try:
+                score, breakdown = self.icp_scorer.score_company(company_name)
+                
+                # Ensure score is an integer
+                if not isinstance(score, (int, float)):
+                    logger.warning(f"    Invalid score type: {type(score)}, defaulting to 0")
+                    score = 0
+                else:
+                    score = int(score)
+                
+                # Check if big pharma
+                is_big_pharma = breakdown.get('is_big_pharma', False)
+                
+                logger.info(f"    Quick ICP for {company_name}: {score}")
+                if breakdown.get('is_competitor'):
+                    logger.info(f"    → CDMO Competitor (excluded)")
+                if is_big_pharma:
+                    logger.info(f"    → Big Pharma (lower threshold applied)")
+                    
+                return score, is_big_pharma
+            except Exception as e:
+                logger.error(f"    Error with dynamic ICP scorer: {str(e)}")
+                logger.info(f"    Falling back to hardcoded scoring")
+        
+        # Fallback: use old method and check company name for big pharma
+        score = self.quick_company_icp(company_name)
+        
+        # Simple big pharma detection
+        big_pharma_names = [
+            'pfizer', 'sanofi', 'novartis', 'roche', 'merck', 'msd', 'astrazeneca',
+            'johnson & johnson', 'j&j', 'abbvie', 'bristol-myers', 'bms', 'eli lilly',
+            'lilly', 'gsk', 'glaxosmithkline', 'takeda', 'daiichi', 'astellas',
+            'bayer', 'boehringer', 'amgen', 'gilead', 'regeneron', 'biogen'
+        ]
+        is_big_pharma = any(bp in company_name.lower() for bp in big_pharma_names)
+        
+        return score, is_big_pharma
+    
     def quick_company_icp(self, company_name: str) -> int:
         """
         Quick ICP assessment for unknown company
@@ -273,6 +319,14 @@ Search thoroughly and return all relevant people you find."""
         if self.icp_scorer:
             try:
                 score, breakdown = self.icp_scorer.score_company(company_name)
+                
+                # Ensure score is an integer
+                if not isinstance(score, (int, float)):
+                    logger.warning(f"    Invalid score type: {type(score)}, defaulting to 0")
+                    score = 0
+                else:
+                    score = int(score)
+                
                 logger.info(f"    Quick ICP for {company_name}: {score}")
                 if breakdown.get('is_competitor'):
                     logger.info(f"    → CDMO Competitor (excluded)")
@@ -587,6 +641,7 @@ Search and assess now."""
         # Step 1: Check company and get ICP
         company_record = self.find_company(company_name)
         company_icp = None
+        is_big_pharma = False
         
         if company_record:
             company_icp = company_record['fields'].get('ICP Fit Score', 0)
@@ -594,10 +649,19 @@ Search and assess now."""
         else:
             # Quick ICP assessment
             logger.info(f"    Company not found - assessing ICP...")
-            company_icp = self.quick_company_icp(company_name)
+            company_icp, is_big_pharma = self.quick_company_icp_with_pharma_flag(company_name)
             
-            if company_icp >= 60:
+            # Different thresholds:
+            # - Big pharma: Include even with lower ICP (they're still valuable)
+            # - Regular companies: Need ICP >= 40
+            # - Pure CDMOs: ICP = 0 (excluded)
+            
+            min_threshold = 20 if is_big_pharma else 40
+            
+            if company_icp >= min_threshold:
                 company_record = self.create_company(company_name, company_icp)
+                if is_big_pharma:
+                    logger.info(f"    ✓ Big Pharma included (ICP: {company_icp})")
             else:
                 logger.info(f"    Skipping - Company ICP too low ({company_icp})")
                 return {'status': 'skipped', 'reason': 'low_icp', 'icp': company_icp}
