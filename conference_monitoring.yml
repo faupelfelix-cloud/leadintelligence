@@ -33,6 +33,15 @@ jobs:
       run: |
         python setup.py
     
+    - name: Diagnose conferences (show why conferences are/aren't monitored)
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "Running diagnostics to show monitoring criteria..."
+        python diagnose_conferences.py || echo "Diagnostics failed but continuing..."
+    
     - name: Run conference intelligence monitoring
       env:
         AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
