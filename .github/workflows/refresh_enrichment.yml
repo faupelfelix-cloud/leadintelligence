@@ -1,0 +1,73 @@
+name: Refresh Lead Enrichment
+
+on:
+  # Run every 6 months (January 1 and July 1)
+  schedule:
+    - cron: '0 6 1 1,7 *'  # 6 AM UTC on Jan 1 and Jul 1
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      refresh_months:
+        description: 'Re-enrich leads older than X months'
+        required: false
+        default: '6'
+        type: string
+      limit:
+        description: 'Max leads to refresh (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Refresh lead enrichment
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        MONTHS="${{ github.event.inputs.refresh_months }}"
+        LIMIT="${{ github.event.inputs.limit }}"
+        
+        if [ -z "$MONTHS" ]; then
+          MONTHS="6"
+        fi
+        
+        echo "Refreshing leads older than $MONTHS months or with missing data..."
+        
+        if [ -n "$LIMIT" ]; then
+          python enrich_leads.py --refresh --refresh-months $MONTHS --limit $LIMIT
+        else
+          python enrich_leads.py --refresh --refresh-months $MONTHS
+        fi
+    
+    - name: Upload log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: refresh-enrichment-log
+        path: enrichment.log
+        retention-days: 30
