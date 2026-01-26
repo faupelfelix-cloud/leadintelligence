@@ -61,7 +61,7 @@ class ConferenceIntelligence:
             fields = conf['fields']
             
             # Get conference date
-            conf_date_str = fields.get('Date')
+            conf_date_str = fields.get('Conference Date')
             if not conf_date_str:
                 continue
             
@@ -440,7 +440,7 @@ Role: {role_at_conference}"""
         lead_record = self.find_lead(name, company_name)
         
         conference_name = conference_info['fields'].get('Conference Name')
-        conference_date = conference_info['fields'].get('Date')
+        conference_date = conference_info['fields'].get('Conference Date')
         
         if lead_record:
             # Existing lead - check for duplicate trigger
@@ -500,7 +500,7 @@ Role: {role_at_conference}"""
         
         fields = conference['fields']
         conference_name = fields.get('Conference Name', 'Unknown')
-        conference_date = fields.get('Date')
+        conference_date = fields.get('Conference Date')
         conference_website = fields.get('Website')
         
         logger.info(f"\n{'='*60}")
