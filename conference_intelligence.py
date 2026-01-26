@@ -129,25 +129,52 @@ Conference: {conference_name}
 Date: {conference_date}
 {f'Website: {conference_website}' if conference_website else ''}
 
-Search for:
-1. Speaker lists (keynotes, panel discussions, presentations)
-2. Exhibitor lists (booth representatives, company attendees)
-3. Company announcements about attendance or participation
-4. LinkedIn posts mentioning attendance at this conference
-5. Press releases about participation
+SEARCH THESE SOURCES (in order of priority):
 
-Focus on:
-- People from BIOTECH/PHARMA companies
-- Companies focused on BIOLOGICS (monoclonal antibodies, bispecifics, ADCs, fusion proteins, biosimilars)
-- Exclude companies focused only on: cell & gene therapy, small molecules, diagnostics, medical devices
-- Focus on decision-maker titles:
-  * Manufacturing, Technical Operations, Operations
-  * CMC, Supply Chain, Procurement
-  * C-level: CEO, COO, CSO, CTO
-  * VP, SVP, Head of, Director level
-- Skip: researchers, scientists, junior roles, recruiters, service providers
+1. OFFICIAL CONFERENCE SOURCES:
+   - Conference website speaker list / agenda
+   - Conference program PDF
+   - Exhibitor list on conference website
+   - Conference press releases
 
-For each person found, determine:
+2. LINKEDIN (critical source!):
+   - Search: "{conference_name}" site:linkedin.com
+   - Search: "attending {conference_name}" site:linkedin.com
+   - Search: "speaking at {conference_name}" site:linkedin.com
+   - Look for posts with conference hashtag mentions
+   - People who updated their profiles mentioning the conference
+
+3. TWITTER/X:
+   - Search: #{conference_name.replace(' ', '')} (conference hashtag)
+   - Search: "{conference_name}" from:biotech OR from:pharma
+   - Company announcements about attending
+
+4. COMPANY PRESS RELEASES:
+   - "[Company] to present at {conference_name}"
+   - "[Company] attending {conference_name}"
+   - Search company investor relations pages
+
+5. INDUSTRY NEWS:
+   - Endpoints News, Fierce Biotech, BioPharma Dive
+   - Conference preview articles
+   - "Companies to watch at {conference_name}"
+
+WHO TO FIND (our ideal customer profile):
+- People from BIOTECH/PHARMA companies developing therapeutics
+- Companies focused on BIOLOGICS: mAbs, bispecifics, ADCs, fusion proteins, biosimilars
+- Decision-maker titles: CEO, COO, CSO, CTO, VP, SVP, Head of, Director
+- Functions: Manufacturing, Operations, CMC, Supply Chain, Procurement, Business Development
+
+WHO TO EXCLUDE (not our customers):
+- Cell & gene therapy companies (CAR-T, gene therapy) - NOT our technology
+- Technology/equipment providers (Sartorius, Cytiva, etc.) - They sell TO us
+- Small molecule only companies
+- Diagnostics/medical devices only
+- Pure service providers, consultants
+- Junior roles (Associate, Manager, Scientist, Researcher)
+- HR, Marketing, Legal (unless C-level)
+
+For each person found, provide:
 - Full name
 - Current job title
 - Company name
@@ -172,7 +199,14 @@ Return results in this JSON format:
   "sources_checked": ["List of sources you searched"]
 }}
 
-Search thoroughly and return all relevant people you find."""
+IMPORTANT: Return ONLY the JSON, no additional text before or after.
+
+Search thoroughly across all sources and return all relevant people you find."""
+- Confidence level (High/Medium/Low)
+
+IMPORTANT: Return ONLY the JSON, no additional text before or after.
+
+Search thoroughly across all sources and return all relevant people you find."""
 
         try:
             logger.info(f"  Searching for attendees at {conference_name}...")
@@ -583,6 +617,7 @@ Search and assess now."""
                 'Lead': [lead_id],
                 'Company': [company_id],  # Link company
                 'Trigger Type': 'CONFERENCE_ATTENDANCE',
+                'Conference Name': conference_name,  # Add conference name
                 'Urgency': 'HIGH',
                 'Description': description,
                 'Outreach Angle': outreach_angle,
