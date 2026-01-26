@@ -230,31 +230,47 @@ ICP SCORING CRITERIA (Use these EXACT rules to score):
 
 CRITICAL INSTRUCTIONS FOR SCORING:
 
-1. CDMO COMPETITOR DETECTION (be precise!):
-   - ONLY mark as CDMO competitor if company's PRIMARY business is contract manufacturing
-   - Pure CDMOs (mark as competitor): Lonza, Samsung Biologics, Fujifilm Diosynth, WuXi Biologics, Catalent, AGC Biologics, Boehringer Ingelheim BioXcellence
-   - NOT CDMOs (do NOT mark as competitor):
-     * Pharma companies with CDMO divisions (Pfizer, Merck, etc.) - these are CUSTOMERS
-     * Companies that do some contract work but primarily develop their own products
-   - When in doubt, do NOT mark as CDMO competitor
+1. AUTOMATIC EXCLUSIONS (score = 0):
 
-2. BIG PHARMA HANDLING:
-   - Big pharma (Sanofi, Pfizer, AstraZeneca, Roche, Novartis, MSD, Daiichi, Astellas, etc.) are POTENTIAL CUSTOMERS
-   - They may score lower on size/revenue criteria (that's OK)
-   - They should still get points for technology, product focus, geography, etc.
-   - NEVER mark big pharma as CDMO competitor
+   a) CDMO/CMO COMPETITORS (only if PRIMARY business is contract manufacturing):
+      - Pure CDMOs: Lonza, Samsung Biologics, Fujifilm Diosynth, WuXi Biologics, Catalent, AGC Biologics
+      - NOT CDMOs: Pharma with CDMO divisions (Pfizer, Merck) - these are CUSTOMERS
+   
+   b) CELL & GENE THERAPY COMPANIES (not our technology):
+      - CAR-T companies (Kite, Novartis Cell & Gene, bluebird bio, etc.)
+      - Gene therapy companies (Spark, Sarepta gene therapy division, etc.)
+      - Cell therapy focused (any company primarily doing cell/gene)
+      - If company does BOTH biologics AND cell/gene, score based on biologics portion
+   
+   c) TECHNOLOGY/EQUIPMENT PROVIDERS (not customers):
+      - Lab equipment: Sartorius, Cytiva, Thermo Fisher Scientific (equipment division)
+      - Bioprocessing equipment: Repligen, Pall, Merck Life Science
+      - Cryopreservation/cold chain: CryoXpert, Brooks Life Sciences, BioLife Solutions
+      - Analytical instruments: Waters, Agilent, PerkinElmer
+      - Software/IT providers
+      - Consulting firms
+   
+   d) NON-BIOLOGICS COMPANIES:
+      - Small molecule only
+      - Medical devices only
+      - Diagnostics only (unless also doing therapeutics)
 
-3. ADC/BIOTECH COMPANIES:
-   - ADC companies (Tubulis, Mersana, ADC Therapeutics, etc.) = HIGH PRIORITY
-   - Biosimilar companies (Sandoz, Formycon, etc.) = HIGH PRIORITY
-   - mAb-focused biotechs = HIGH PRIORITY
-   - These should score high on technology (20 pts) and product focus (5 pts)
+2. WHO WE WANT (potential customers):
+   - Biotech companies developing mAbs, bispecifics, ADCs, fusion proteins
+   - Biosimilar developers (Sandoz, Formycon, etc.)
+   - Pharma companies with biologics pipelines
+   - Companies that NEED manufacturing (our service)
+
+3. BIG PHARMA HANDLING:
+   - Big pharma (Sanofi, Pfizer, AstraZeneca, Roche, etc.) = POTENTIAL CUSTOMERS
+   - They score lower on size criteria but are still valuable
+   - Mark is_big_pharma = true for these
 
 4. SCORING GUIDANCE:
-   - Apply each criterion independently based on the rules
-   - Don't give 0 just because company is large - use the actual criteria
-   - A large pharma with biologics might score 40-60 (lower but still valid)
-   - A mid-size ADC biotech should score 80-100
+   - ADC companies (Tubulis, Mersana, etc.) = HIGH PRIORITY (80-100)
+   - Biosimilar developers = HIGH PRIORITY (80-100)
+   - Mid-size mAb biotechs = PERFECT FIT (85-105)
+   - Big pharma with biologics = ACCEPTABLE (30-50, but still include)
 
 Search for {company_name} and assess using the criteria above.
 
@@ -272,7 +288,10 @@ Return JSON with scores for each criterion:
     "product_focus": "NBE/Biosimilar/etc"
   }},
   "is_cdmo_competitor": false,
+  "is_cell_gene_therapy": false,
+  "is_technology_provider": false,
   "is_big_pharma": false,
+  "exclusion_reason": null,
   "scores": {{
     "company_size": {{"value": "50-300", "points": 15}},
     "annual_revenue": {{"value": "$20M-$100M", "points": 15}},
@@ -284,7 +303,7 @@ Return JSON with scores for each criterion:
     "product_focus": {{"value": "NBEs", "points": 5}}
   }},
   "total_score": X,
-  "tier": "Perfect Fit / Strong Fit / Acceptable / Low Priority",
+  "tier": "Perfect Fit / Strong Fit / Acceptable / Low Priority / Excluded",
   "reasoning": "Brief explanation of why this score"
 }}
 
@@ -302,78 +321,123 @@ Search and assess now."""
         # Build prompt using your criteria
         prompt = self.build_scoring_prompt(company_name)
         
-        try:
-            # Call Claude with web search
-            message = self.anthropic_client.messages.create(
-                model=self.config['anthropic']['model'],
-                max_tokens=2000,
-                tools=[{
-                    "type": "web_search_20250305",
-                    "name": "web_search"
-                }],
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
-            
-            # Extract text
-            result_text = ""
-            for block in message.content:
-                if block.type == "text":
-                    result_text += block.text
-            
-            # Parse JSON (robust)
-            json_str = self.extract_json(result_text)
-            
-            if not json_str:
-                logger.error("No JSON found in response")
-                return 0, {}
-            
-            data = json.loads(json_str)
-            
-            # Check if CDMO competitor
-            if data.get('is_cdmo_competitor', False):
-                logger.info(f"  ⚠️  {company_name} is a CDMO competitor - score = 0")
-                return 0, {
-                    'is_competitor': True,
-                    'reason': 'CDMO/CMO competitor'
-                }
-            
-            # Get total score - ensure it's an integer
-            total_score = data.get('total_score', 0)
-            
-            # Handle case where score is a string or invalid
-            if isinstance(total_score, str):
-                # Try to extract number from string
-                import re
-                match = re.search(r'(\d+)', str(total_score))
-                if match:
-                    total_score = int(match.group(1))
-                else:
-                    logger.warning(f"  Invalid score format: {total_score}, defaulting to 0")
+        # Retry logic for API errors
+        max_retries = 2
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # Call Claude with web search
+                message = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'],
+                    max_tokens=2000,
+                    tools=[{
+                        "type": "web_search_20250305",
+                        "name": "web_search"
+                    }],
+                    messages=[{
+                        "role": "user",
+                        "content": prompt
+                    }]
+                )
+                
+                # Extract text
+                result_text = ""
+                for block in message.content:
+                    if block.type == "text":
+                        result_text += block.text
+                
+                # Check for HTML error pages (API errors)
+                if '<!DOCTYPE html>' in result_text or '<html' in result_text.lower():
+                    if attempt < max_retries:
+                        logger.warning(f"  API returned HTML error, retrying ({attempt + 1}/{max_retries})...")
+                        import time
+                        time.sleep(2)
+                        continue
+                    else:
+                        logger.error(f"  API error after {max_retries} retries")
+                        return 0, {'error': 'API error', 'retry_failed': True}
+                
+                # Parse JSON (robust)
+                json_str = self.extract_json(result_text)
+                
+                if not json_str:
+                    logger.error("No JSON found in response")
+                    return 0, {'error': 'No JSON in response'}
+                
+                data = json.loads(json_str)
+                
+                # Check exclusions
+                if data.get('is_cdmo_competitor', False):
+                    logger.info(f"  ⚠️  {company_name} is a CDMO competitor - score = 0")
+                    return 0, {
+                        'is_competitor': True,
+                        'exclusion_reason': 'CDMO/CMO competitor'
+                    }
+                
+                if data.get('is_cell_gene_therapy', False):
+                    logger.info(f"  ⚠️  {company_name} is cell/gene therapy - score = 0")
+                    return 0, {
+                        'is_cell_gene_therapy': True,
+                        'exclusion_reason': 'Cell & gene therapy (not our technology)'
+                    }
+                
+                if data.get('is_technology_provider', False):
+                    logger.info(f"  ⚠️  {company_name} is a technology provider - score = 0")
+                    return 0, {
+                        'is_technology_provider': True,
+                        'exclusion_reason': 'Technology/equipment provider (not a customer)'
+                    }
+                
+                # Get total score - ensure it's an integer
+                total_score = data.get('total_score', 0)
+                
+                # Handle case where score is a string or invalid
+                if isinstance(total_score, str):
+                    # Try to extract number from string
+                    import re
+                    match = re.search(r'(\d+)', str(total_score))
+                    if match:
+                        total_score = int(match.group(1))
+                    else:
+                        logger.warning(f"  Invalid score format: {total_score}, defaulting to 0")
+                        total_score = 0
+                elif not isinstance(total_score, (int, float)):
                     total_score = 0
-            elif not isinstance(total_score, (int, float)):
-                total_score = 0
-            else:
-                total_score = int(total_score)
-            
-            # Build detailed breakdown
-            breakdown = {
-                'total': total_score,
-                'tier': data.get('tier', ''),
-                'reasoning': data.get('reasoning', ''),
-                'company_info': data.get('company_info', {}),
-                'scores': data.get('scores', {}),
-                'is_competitor': False,
-                'is_big_pharma': data.get('is_big_pharma', False)
-            }
-            
-            return total_score, breakdown
-            
-        except Exception as e:
-            logger.error(f"Error scoring company {company_name}: {str(e)}")
-            return 0, {'error': str(e)}
+                else:
+                    total_score = int(total_score)
+                
+                # Build detailed breakdown
+                breakdown = {
+                    'total': total_score,
+                    'tier': data.get('tier', ''),
+                    'reasoning': data.get('reasoning', ''),
+                    'company_info': data.get('company_info', {}),
+                    'scores': data.get('scores', {}),
+                    'is_competitor': False,
+                    'is_big_pharma': data.get('is_big_pharma', False),
+                    'exclusion_reason': data.get('exclusion_reason')
+                }
+                
+                return total_score, breakdown
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error for {company_name}: {str(e)}")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(1)
+                    continue
+                return 0, {'error': f'JSON decode error: {str(e)}'}
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's an API error (520, 503, etc.)
+                if any(code in error_str for code in ['520', '503', '502', '500']):
+                    if attempt < max_retries:
+                        logger.warning(f"  API error, retrying ({attempt + 1}/{max_retries})...")
+                        import time
+                        time.sleep(2)
+                        continue
+                logger.error(f"Error scoring company {company_name}: {error_str}")
+                return 0, {'error': error_str}
     
     def extract_json(self, text: str) -> str:
         """Extract JSON from Claude's response"""
