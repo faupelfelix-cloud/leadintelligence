@@ -49,7 +49,7 @@ def diagnose():
     for idx, conf in enumerate(all_conferences, 1):
         fields = conf['fields']
         conf_name = fields.get('Conference Name', 'Unnamed')
-        conf_date_str = fields.get('Date')
+        conf_date_str = fields.get('Conference Date')
         
         print(f"{idx}. {conf_name}")
         print("   " + "-"*60)
