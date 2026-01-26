@@ -452,7 +452,7 @@ Role: {role_at_conference}"""
             trigger_data = {
                 'Lead': [lead_id],
                 'Trigger Type': 'CONFERENCE_ATTENDANCE',
-                'Trigger Date': datetime.now().strftime('%Y-%m-%d'),
+                'Date Detected': datetime.now().strftime('%Y-%m-%d'),
                 'Status': 'New',
                 'Trigger Details': details,
                 'Confidence Score': 95,
