@@ -21,6 +21,24 @@ anthropic:
   model: "claude-sonnet-4-20250514"
   max_tokens: 4096
 
+# ============================================================
+# FEATURE TOGGLES - Enable/disable expensive features
+# ============================================================
+features:
+  # Conference Intelligence - monitors conferences for attendees
+  # WARNING: This is expensive (~$1-2 per conference monitored)
+  # Set to false to disable automatic monitoring
+  conference_intelligence:
+    enabled: false  # Set to true to enable
+    
+  # Lead Enrichment - enriches leads with contact info
+  lead_enrichment:
+    enabled: true
+    
+  # Lead Monitoring - monitors leads for trigger events
+  lead_monitoring:
+    enabled: true
+
 # Enrichment Settings
 enrichment:
   # Lead enrichment - what to search for
