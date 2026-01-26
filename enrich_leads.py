@@ -46,6 +46,15 @@ class LeadEnricher:
             api_key=self.config['anthropic']['api_key']
         )
         
+        # Initialize dynamic ICP scorer (optional - for companies without ICP)
+        try:
+            from complete_icp_scorer import CompleteICPScorer
+            self.icp_scorer = CompleteICPScorer(self.config)
+            logger.info(f"✓ ICP Scorer loaded: {len(self.icp_scorer.criteria)} criteria")
+        except Exception as e:
+            logger.warning(f"ICP Scorer not available: {str(e)}")
+            self.icp_scorer = None
+        
         logger.info("LeadEnricher initialized successfully")
     
     def calculate_lead_icp_score(self, lead_data: Dict, company_icp: int = None) -> tuple:
@@ -641,6 +650,23 @@ Only return valid JSON."""
                 try:
                     company = self.companies_table.get(company_ids[0])
                     company_icp = company['fields'].get('ICP Fit Score')
+                    
+                    # If company doesn't have ICP score yet, calculate it
+                    if company_icp is None and self.icp_scorer:
+                        company_name = company['fields'].get('Company Name', '')
+                        if company_name:
+                            logger.info(f"  Company '{company_name}' missing ICP - calculating now...")
+                            try:
+                                new_icp, breakdown = self.icp_scorer.score_company(company_name)
+                                
+                                # Update company with new ICP
+                                self.companies_table.update(company_ids[0], {
+                                    'ICP Fit Score': new_icp
+                                })
+                                company_icp = new_icp
+                                logger.info(f"  ✓ Updated company ICP: {new_icp}")
+                            except Exception as e:
+                                logger.warning(f"  Could not calculate company ICP: {str(e)}")
                 except:
                     pass
             
