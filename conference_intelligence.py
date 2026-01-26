@@ -47,6 +47,15 @@ class ConferenceIntelligence:
             api_key=self.config['anthropic']['api_key']
         )
         
+        # Initialize dynamic ICP scorer
+        from complete_icp_scorer import CompleteICPScorer
+        try:
+            self.icp_scorer = CompleteICPScorer(self.config)
+            logger.info(f"✓ ICP Scorer loaded: {len(self.icp_scorer.criteria)} criteria, {self.icp_scorer.get_total_score()} points total")
+        except Exception as e:
+            logger.warning(f"Could not load ICP scorer: {str(e)}. Using fallback scoring.")
+            self.icp_scorer = None
+        
         logger.info("ConferenceIntelligence initialized successfully")
     
     def get_conferences_to_monitor(self) -> List[Dict]:
@@ -255,35 +264,95 @@ Search thoroughly and return all relevant people you find."""
             return []
     
     def quick_company_icp(self, company_name: str) -> int:
-        """Quick ICP assessment for unknown company"""
+        """
+        Quick ICP assessment for unknown company
+        Uses dynamic ICP scorer if available, otherwise fallback to hardcoded
+        """
         
+        # Use dynamic scorer if available
+        if self.icp_scorer:
+            try:
+                score, breakdown = self.icp_scorer.score_company(company_name)
+                logger.info(f"    Quick ICP for {company_name}: {score}")
+                if breakdown.get('is_competitor'):
+                    logger.info(f"    → CDMO Competitor (excluded)")
+                return score
+            except Exception as e:
+                logger.error(f"    Error with dynamic ICP scorer: {str(e)}")
+                logger.info(f"    Falling back to hardcoded scoring")
+        
+        # Fallback: Use hardcoded prompt (your improved version)
         prompt = f"""Quick ICP assessment for: {company_name}
 
-Assess if this company is a good fit for a biologics CDMO (Contract Development and Manufacturing Organization).
+You are assessing fit for Rezon Bio, a European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs, biosimilars).
 
-Search for information about:
-1. Company size (employees/revenue)
-2. Focus area (biologics, cell & gene, small molecules, etc.)
-3. Technology platform (mammalian cell culture preferred)
-4. Development stage (clinical/commercial)
-5. Geographic location
+CRITICAL EXCLUSIONS - Automatic ICP 0 (DO NOT partner with):
+- CDMOs/CMOs (competitors): Fujifilm Diosynth, Lonza, Samsung Biologics, Thermo Fisher Biologics, WuXi, Catalent Biologics, etc.
+- Contract manufacturers offering similar services
+- Pure service providers (CROs without manufacturing needs)
 
-Scoring criteria:
-- Company size: 50-500 employees = 15 pts, 500-1000 = 10 pts, <50 or >1000 = 5 pts
-- Focus: Biologics (mAbs, bispecifics, ADCs) = 25 pts, Mixed = 15 pts, Non-biologics = 0 pts
-- Stage: Phase 2/3 or Commercial = 20 pts, Phase 1 = 15 pts, Preclinical = 10 pts
-- Location: EU/US = 10 pts, Other = 5 pts
-- Technology: Mammalian cell culture = 15 pts, Other biologics = 10 pts, Non-biologics = 0 pts
+IDEAL CUSTOMERS - High ICP (75-100):
+✓ Biosimilar developers (we have biosimilar expertise!)
+✓ Mid-size biotechs (50-1000 employees) with biologics programs
+✓ Pharma companies with biologics pipelines (any size if biologics focus)
+✓ Biotechs in Phase 2/3 or commercial stage
+✓ Companies with mAbs, bispecifics, ADCs, fusion proteins
+✓ European companies (preferred but not required)
 
-Return JSON:
+SCORING CRITERIA (0-100):
+
+1. COMPANY TYPE (Critical - can be 0 or high):
+   - CDMO/CMO competitor = 0 (automatic exclusion)
+   - Biosimilar developer = 30 pts (HIGH value!)
+   - Biotech with biologics = 30 pts
+   - Pharma with biologics = 25 pts
+   - Academic/research only = 0 pts
+
+2. FOCUS AREA (0-25):
+   - Pure biologics (mAbs, bispecifics, ADCs) = 25 pts
+   - Biosimilars = 25 pts (we have expertise!)
+   - Biologics + cell/gene therapy = 20 pts
+   - Biologics + small molecules = 15 pts
+   - No biologics = 0 pts
+
+3. DEVELOPMENT STAGE (0-20):
+   - Commercial or Phase 3 = 20 pts
+   - Phase 2 = 18 pts
+   - Phase 1 = 12 pts
+   - Preclinical with funding = 8 pts
+   - Research only = 0 pts
+
+4. COMPANY SIZE (0-15):
+   - 50-500 employees = 15 pts (sweet spot)
+   - 500-1000 employees = 12 pts
+   - 20-50 employees = 10 pts (smaller but viable)
+   - >1000 employees = 8 pts (big pharma - still good if biologics)
+   - <20 employees = 5 pts (too small)
+
+5. GEOGRAPHIC LOCATION (0-10):
+   - Europe (Germany, Switzerland, UK, France, etc.) = 10 pts
+   - US = 8 pts
+   - Other = 5 pts
+
+EXAMPLES:
+- BioMarin (large pharma with biologics) = 85-90 (biologics focus, commercial, big pharma)
+- Sandoz (biosimilars) = 90-95 (biosimilar expertise match!)
+- Sanofi (large pharma with biologics) = 80-85 (size, biologics programs)
+- MSD/Merck (large pharma with biologics) = 80-85 (if biologics division)
+- Small biotech (30 employees, Phase 1 biologics) = 65-70 (small but biologics)
+- Fujifilm Diosynth = 0 (CDMO competitor)
+- Thermo Fisher Biologics = 0 (CDMO competitor)
+
+Search for {company_name} and return JSON:
 {{
-  "company_size": "50-200 employees",
-  "focus_area": "Biologics (mAbs, bispecifics)",
-  "technology": "Mammalian cell culture",
-  "stage": "Phase 2/3",
-  "location": "Germany",
+  "company_type": "Biotech/Pharma/Biosimilar/CDMO",
+  "focus_area": "Biologics/Biosimilars/Mixed/Other",
+  "stage": "Commercial/Phase 3/Phase 2/etc",
+  "size": "X employees",
+  "location": "Country",
+  "is_competitor": true/false,
   "icp_score": 85,
-  "reasoning": "Brief explanation"
+  "reasoning": "Brief explanation of score"
 }}
 
 Search and assess now."""
@@ -432,7 +501,7 @@ Search and assess now."""
             logger.error(f"    ✗ Failed to create lead {name}: {str(e)}")
             return None
     
-    def create_conference_trigger(self, lead_id: str, conference_name: str, 
+    def create_conference_trigger(self, lead_id: str, company_id: str, conference_name: str, 
                                   conference_date: str, role_at_conference: str,
                                   session_topic: str = None, source_url: str = None) -> bool:
         """Create CONFERENCE_ATTENDANCE trigger"""
@@ -442,7 +511,7 @@ Search and assess now."""
             if session_topic:
                 description += f"\nTopic: {session_topic}"
             if source_url:
-                description += f"\nSource: {source_url}"
+                description += f"\nSource URL: {source_url}"
             
             # Build outreach angle
             outreach_angle = f"Attending/speaking at {conference_name}. Great opportunity to connect before or at the event."
@@ -450,16 +519,23 @@ Search and assess now."""
             # Timing recommendation
             timing = "Contact 2-4 weeks before conference to arrange meeting"
             
+            # Build sources list
+            sources = ["Conference Intelligence System"]
+            if source_url:
+                sources.append(source_url)
+            
             trigger_data = {
                 'Date Detected': datetime.now().strftime('%Y-%m-%d'),
                 'Lead': [lead_id],
+                'Company': [company_id],  # Link company
                 'Trigger Type': 'CONFERENCE_ATTENDANCE',
                 'Urgency': 'HIGH',
                 'Description': description,
                 'Outreach Angle': outreach_angle,
                 'Timing Recommendation': timing,
                 'Event Date': conference_date,
-                'Status': 'New'
+                'Status': 'New',
+                'Sources': ', '.join(sources)  # Add sources
             }
             
             self.trigger_history_table.create(trigger_data)
@@ -496,6 +572,11 @@ Search and assess now."""
         session_topic = attendee.get('session_topic')
         source_url = attendee.get('source_url')
         confidence = attendee.get('confidence', 'Medium')
+        
+        # Validate name and title are different (sometimes AI returns title as name)
+        if name and title and name.lower() == title.lower():
+            logger.warning(f"  Skipping - name and title are the same: {name}")
+            return {'status': 'skipped', 'reason': 'invalid_name'}
         
         if not all([name, title, company_name]):
             logger.warning(f"  Incomplete data for attendee: {name}")
@@ -541,6 +622,7 @@ Search and assess now."""
             # Create trigger
             success = self.create_conference_trigger(
                 lead_id=lead_id,
+                company_id=company_record['id'],
                 conference_name=conference_name,
                 conference_date=conference_date,
                 role_at_conference=role,
@@ -569,6 +651,7 @@ Search and assess now."""
             # Create trigger
             success = self.create_conference_trigger(
                 lead_id=lead_record['id'],
+                company_id=company_record['id'],
                 conference_name=conference_name,
                 conference_date=conference_date,
                 role_at_conference=role,
