@@ -264,6 +264,44 @@ class LeadEnricher:
         logger.info(f"Found {len(records)} leads with status '{status}'")
         return records
     
+    def get_leads_needing_refresh(self, months: int = 6) -> List[Dict]:
+        """Fetch leads that need re-enrichment (6+ months old or missing data)"""
+        from datetime import datetime, timedelta
+        
+        cutoff_date = (datetime.now() - timedelta(days=months * 30)).strftime('%Y-%m-%d')
+        
+        # Get all enriched leads
+        all_leads = self.leads_table.all(formula="{Enrichment Status} = 'Enriched'")
+        
+        needs_refresh = []
+        for lead in all_leads:
+            fields = lead['fields']
+            
+            # Check if last enrichment date is old or missing
+            last_enrichment = fields.get('Last Enrichment Date')
+            
+            # Reason 1: Last enrichment was 6+ months ago
+            if last_enrichment and last_enrichment < cutoff_date:
+                needs_refresh.append(lead)
+                continue
+            
+            # Reason 2: Missing critical fields
+            missing_fields = []
+            if not fields.get('Email'):
+                missing_fields.append('Email')
+            if not fields.get('LinkedIn URL'):
+                missing_fields.append('LinkedIn')
+            if not fields.get('Lead ICP Score'):
+                missing_fields.append('ICP Score')
+            if not fields.get('Email Subject'):  # Outreach not generated
+                missing_fields.append('Outreach')
+            
+            if missing_fields:
+                needs_refresh.append(lead)
+        
+        logger.info(f"Found {len(needs_refresh)} leads needing refresh")
+        return needs_refresh
+    
     def get_company_info(self, company_record_ids: List[str]) -> Optional[Dict]:
         """Fetch company information for context"""
         if not company_record_ids:
@@ -524,7 +562,8 @@ Only return valid JSON."""
         # Prepare update payload
         update_fields = {
             'Enrichment Status': 'Enriched' if overall_conf != 'Failed' else 'Failed',
-            'Enrichment Confidence': confidence
+            'Enrichment Confidence': confidence,
+            'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d')
         }
         
         # Build intelligence notes
@@ -699,9 +738,22 @@ Only return valid JSON."""
         
         self.intelligence_table.create(intelligence_record)
     
-    def enrich_leads(self, status: str = "Not Enriched", limit: Optional[int] = None):
-        """Main enrichment workflow"""
-        leads = self.get_leads_to_enrich(status)
+    def enrich_leads(self, status: str = "Not Enriched", limit: Optional[int] = None, 
+                     refresh: bool = False, refresh_months: int = 6):
+        """
+        Main enrichment workflow
+        
+        Args:
+            status: Enrichment status to filter by (default: "Not Enriched")
+            limit: Max number of leads to process
+            refresh: If True, re-enrich old leads or those with missing data
+            refresh_months: Consider leads older than this many months for refresh (default: 6)
+        """
+        if refresh:
+            logger.info(f"Refresh mode: Finding leads needing re-enrichment (>{refresh_months} months or missing data)")
+            leads = self.get_leads_needing_refresh(months=refresh_months)
+        else:
+            leads = self.get_leads_to_enrich(status)
         
         if limit:
             leads = leads[:limit]
@@ -819,6 +871,10 @@ def main():
                        help='Enrichment status to filter by (default: Not Enriched)')
     parser.add_argument('--limit', type=int, default=None,
                        help='Limit number of leads to process')
+    parser.add_argument('--refresh', action='store_true',
+                       help='Re-enrich leads that are 6+ months old or have missing data')
+    parser.add_argument('--refresh-months', type=int, default=6,
+                       help='Re-enrich leads older than this many months (default: 6)')
     parser.add_argument('--config', default='config.yaml',
                        help='Path to config file')
     
@@ -826,7 +882,12 @@ def main():
     
     try:
         enricher = LeadEnricher(config_path=args.config)
-        enricher.enrich_leads(status=args.status, limit=args.limit)
+        enricher.enrich_leads(
+            status=args.status, 
+            limit=args.limit,
+            refresh=args.refresh,
+            refresh_months=args.refresh_months
+        )
     except FileNotFoundError:
         logger.error(f"Config file not found: {args.config}")
         sys.exit(1)
