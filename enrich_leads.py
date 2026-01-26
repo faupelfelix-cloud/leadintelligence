@@ -48,6 +48,215 @@ class LeadEnricher:
         
         logger.info("LeadEnricher initialized successfully")
     
+    def calculate_lead_icp_score(self, lead_data: Dict, company_icp: int = None) -> tuple:
+        """
+        Calculate Lead ICP score based on title, seniority, function, etc.
+        Returns: (score, tier, justification_text, combined_priority)
+        """
+        score = 0
+        justification = []
+        
+        title = lead_data.get('title', '').lower() if lead_data.get('title') else ''
+        
+        # 1. Title/Role Relevance (0-25 points)
+        title_score = self.score_title_relevance(title)
+        score += title_score
+        title_display = lead_data.get('title', 'Unknown')
+        if title_score >= 20:
+            justification.append(f"✓ Title: {title_display} (+{title_score} pts - PRIMARY INFLUENCER)")
+        elif title_score >= 15:
+            justification.append(f"✓ Title: {title_display} (+{title_score} pts - SECONDARY INFLUENCER)")
+        elif title_score >= 8:
+            justification.append(f"○ Title: {title_display} (+{title_score} pts)")
+        else:
+            justification.append(f"✗ Title: {title_display} (+{title_score} pts - LOW RELEVANCE)")
+        
+        # 2. Seniority Level (0-20 points)
+        seniority_score = self.score_seniority(title)
+        score += seniority_score
+        if seniority_score >= 18:
+            justification.append(f"✓ Seniority: C-Level/VP (+{seniority_score} pts)")
+        elif seniority_score >= 15:
+            justification.append(f"✓ Seniority: Director (+{seniority_score} pts)")
+        elif seniority_score >= 10:
+            justification.append(f"○ Seniority: Senior Manager (+{seniority_score} pts)")
+        else:
+            justification.append(f"○ Seniority: Manager/IC (+{seniority_score} pts)")
+        
+        # 3. Function Fit (0-20 points)
+        function_score = self.score_function_fit(title)
+        score += function_score
+        if function_score >= 18:
+            justification.append(f"✓ Function: Manufacturing/Ops (+{function_score} pts - PERFECT)")
+        elif function_score >= 15:
+            justification.append(f"✓ Function: Operations (+{function_score} pts)")
+        elif function_score >= 10:
+            justification.append(f"○ Function: R&D/Tech (+{function_score} pts)")
+        else:
+            justification.append(f"✗ Function: Other (+{function_score} pts)")
+        
+        # 4. Decision Power (0-15 points)
+        decision_score = self.score_decision_power(title)
+        score += decision_score
+        if decision_score >= 12:
+            justification.append(f"✓ Decision Power: Budget authority (+{decision_score} pts)")
+        elif decision_score >= 8:
+            justification.append(f"○ Decision Power: Strong influence (+{decision_score} pts)")
+        else:
+            justification.append(f"○ Decision Power: Limited (+{decision_score} pts)")
+        
+        # 5. Career Stage (0-10 points) - default
+        career_score = 8
+        justification.append(f"○ Career Stage: Established (+{career_score} pts)")
+        score += career_score
+        
+        # 6. Geography (0-5 points)
+        location = lead_data.get('location', '') or ''
+        geo_score = self.score_geography(location.lower() if location else '')
+        score += geo_score
+        if geo_score >= 5:
+            justification.append(f"✓ Geography: Europe (+{geo_score} pts)")
+        elif geo_score >= 4:
+            justification.append(f"✓ Geography: US (+{geo_score} pts)")
+        else:
+            loc_display = location if location else 'Unknown'
+            justification.append(f"○ Geography: {loc_display} (+{geo_score} pts)")
+        
+        # 7. Engagement (0-5 points) - default
+        engagement_score = 3
+        justification.append(f"○ Engagement: Not yet analyzed (+{engagement_score} pts)")
+        score += engagement_score
+        
+        # Determine tier
+        if score >= 85:
+            tier = "Perfect Fit (Tier 1)"
+        elif score >= 70:
+            tier = "Strong Fit (Tier 2)"
+        elif score >= 55:
+            tier = "Good Fit (Tier 3)"
+        elif score >= 40:
+            tier = "Acceptable Fit (Tier 4)"
+        else:
+            tier = "Poor Fit (Tier 5)"
+        
+        # Build justification
+        justification_text = "\n".join(justification)
+        justification_text += f"\n\nTOTAL: {score}/100 points\n→ {tier}"
+        
+        # Combined priority
+        combined_priority = None
+        if company_icp is not None:
+            combined_priority = self.calculate_combined_priority(company_icp, score)
+            justification_text += f"\n\nCOMPANY ICP: {company_icp}/105\n→ COMBINED: {combined_priority}"
+        
+        return (score, tier, justification_text, combined_priority)
+    
+    def score_title_relevance(self, title: str) -> int:
+        """Score title relevance (0-25 points)"""
+        if not title:
+            return 0
+        
+        decision_makers = ['ceo', 'coo', 'president', 'cso', 'cto', 'founder']
+        if any(dm in title for dm in decision_makers):
+            return 25
+        
+        primary = ['vp manufacturing', 'vp technical operations', 'vp operations',
+                  'vp supply chain', 'vp cmc', 'svp manufacturing', 'svp operations',
+                  'head of manufacturing', 'head of operations', 'head of supply chain']
+        if any(p in title for p in primary):
+            return 20
+        
+        secondary = ['director manufacturing', 'director operations', 'director supply chain',
+                    'director cmc', 'senior director']
+        if any(s in title for s in secondary):
+            return 15
+        
+        if any(c in title for c in ['associate director', 'senior manager', 'manager']):
+            return 8
+        
+        if any(l in title for l in ['scientist', 'research', 'clinical']):
+            return 3
+        
+        return 0
+    
+    def score_seniority(self, title: str) -> int:
+        """Score seniority (0-20 points)"""
+        if not title:
+            return 0
+        
+        if any(c in title for c in ['ceo', 'coo', 'cso', 'cto', 'cfo', 'chief']):
+            return 20
+        if any(v in title for v in ['vp', 'vice president', 'svp']):
+            return 18
+        if 'head of' in title or ('director' in title and 'associate' not in title):
+            return 15
+        if 'senior manager' in title or 'associate director' in title:
+            return 10
+        if 'manager' in title:
+            return 5
+        return 2
+    
+    def score_function_fit(self, title: str) -> int:
+        """Score function fit (0-20 points)"""
+        if not title:
+            return 0
+        
+        if any(p in title for p in ['manufacturing', 'technical operations', 'cmc', 'supply chain']):
+            return 20
+        if any(g in title for g in ['operations', 'production', 'quality']):
+            return 15
+        if any(a in title for a in ['r&d', 'research', 'development', 'process']):
+            return 10
+        if any(l in title for l in ['clinical', 'regulatory', 'business']):
+            return 5
+        return 0
+    
+    def score_decision_power(self, title: str) -> int:
+        """Score decision power (0-15 points)"""
+        if not title:
+            return 0
+        
+        if any(b in title for b in ['ceo', 'coo', 'cfo', 'vp', 'svp', 'head of']):
+            return 15
+        if 'director' in title and 'associate' not in title:
+            return 12
+        if 'senior manager' in title or 'associate director' in title:
+            return 8
+        if 'manager' in title:
+            return 4
+        return 0
+    
+    def score_geography(self, location: str) -> int:
+        """Score geography (0-5 points)"""
+        if not location:
+            return 3
+        
+        europe = ['germany', 'poland', 'uk', 'france', 'netherlands', 'switzerland',
+                 'belgium', 'sweden', 'denmark', 'austria', 'italy', 'spain']
+        if any(e in location for e in europe):
+            return 5
+        
+        us = ['usa', 'united states', 'california', 'massachusetts', 'new york']
+        if any(u in location for u in us):
+            return 4
+        
+        return 2
+    
+    def calculate_combined_priority(self, company_icp: int, lead_icp: int) -> str:
+        """Calculate combined priority"""
+        if company_icp >= 90 and lead_icp >= 70:
+            return "🔥 HOT - Priority 1"
+        elif company_icp >= 90 and lead_icp >= 55:
+            return "📈 WARM - Priority 2"
+        elif company_icp >= 75 and lead_icp >= 70:
+            return "📈 WARM - Priority 2"
+        elif company_icp >= 75 and lead_icp >= 55:
+            return "➡️ MEDIUM - Priority 3"
+        elif company_icp >= 60 and lead_icp >= 40:
+            return "⬇️ LOW - Priority 4"
+        else:
+            return "❌ SKIP - Priority 5"
+    
     def get_leads_to_enrich(self, status: str = "Not Enriched") -> List[Dict]:
         """Fetch leads that need enrichment"""
         formula = f"{{Enrichment Status}} = '{status}'"
@@ -258,6 +467,38 @@ Only return the JSON, no other text."""
             new_notes = '\n'.join(notes_parts)
             enrichment_header = f"\n\n---\nEnrichment on {datetime.now().strftime('%Y-%m-%d')}:\n"
             update_fields['Intelligence Notes'] = enrichment_header + new_notes
+        
+        # Calculate Lead ICP Score
+        # Get company ICP if lead is linked to company
+        try:
+            existing_record = self.leads_table.get(record_id)
+            company_ids = existing_record['fields'].get('Company', [])
+            company_icp = None
+            
+            if company_ids:
+                try:
+                    company = self.companies_table.get(company_ids[0])
+                    company_icp = company['fields'].get('ICP Fit Score')
+                except:
+                    pass
+            
+            # Calculate Lead ICP
+            lead_icp_score, lead_icp_tier, lead_icp_justification, combined_priority = self.calculate_lead_icp_score(
+                enriched_data, 
+                company_icp
+            )
+            
+            update_fields['Lead ICP Score'] = lead_icp_score
+            update_fields['Lead ICP Tier'] = lead_icp_tier
+            update_fields['Lead ICP Justification'] = lead_icp_justification
+            
+            if combined_priority:
+                update_fields['Combined Priority'] = combined_priority
+                logger.info(f"  Lead ICP: {lead_icp_score}/100 ({lead_icp_tier}) | Combined: {combined_priority}")
+            else:
+                logger.info(f"  Lead ICP: {lead_icp_score}/100 ({lead_icp_tier})")
+        except Exception as e:
+            logger.warning(f"  Could not calculate Lead ICP: {str(e)}")
         
         # Update the record with error handling
         try:
