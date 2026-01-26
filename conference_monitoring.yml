@@ -7,12 +7,41 @@ on:
   
   # Manual trigger
   workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force run even if disabled in config'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+# Set this to false to disable scheduled runs
+env:
+  CONFERENCE_INTELLIGENCE_ENABLED: 'false'  # Change to 'true' to enable
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     
     steps:
+    - name: Check if enabled
+      run: |
+        if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.force_run }}" == "true" ]; then
+          echo "Force run requested - continuing..."
+        elif [ "$CONFERENCE_INTELLIGENCE_ENABLED" != "true" ]; then
+          echo "============================================================"
+          echo "CONFERENCE INTELLIGENCE IS DISABLED"
+          echo "============================================================"
+          echo "To enable:"
+          echo "1. Edit .github/workflows/conference_monitoring.yml"
+          echo "2. Change CONFERENCE_INTELLIGENCE_ENABLED to 'true'"
+          echo "3. Or use 'Run workflow' button with force_run=true"
+          echo "============================================================"
+          exit 0
+        fi
+    
     - name: Checkout code
       uses: actions/checkout@v4
     
