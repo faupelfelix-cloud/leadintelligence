@@ -57,10 +57,27 @@ def diagnose():
         # Check 1: Has date?
         if not conf_date_str:
             print("   ❌ SKIP REASON: No date set")
+            print("      DEBUG: 'Date' field is empty or null")
             print()
             continue
         
-        print(f"   Conference Date: {conf_date_str}")
+        print(f"   Conference Date (raw from Airtable): '{conf_date_str}'")
+        print(f"   Date type: {type(conf_date_str)}")
+        
+        # Try to detect the format
+        if isinstance(conf_date_str, str):
+            if '.' in conf_date_str:
+                print(f"   ⚠️  Format detected: European (DD.M.YYYY or similar)")
+                print(f"   ⚠️  Expected format: ISO (YYYY-MM-DD)")
+                print(f"   ❌ SKIP REASON: Date format not ISO")
+                print()
+                continue
+            elif '/' in conf_date_str:
+                print(f"   ⚠️  Format detected: US (M/D/YYYY or similar)")
+                print(f"   ⚠️  Expected format: ISO (YYYY-MM-DD)")
+                print(f"   ❌ SKIP REASON: Date format not ISO")
+                print()
+                continue
         
         # Parse date
         try:
@@ -145,11 +162,27 @@ def diagnose():
     print("4. Monitored <14 days ago → Wait until 14 days since last check")
     print("5. ICP Filter ON without 'Biologics' → Add 'Biologics' to Focus Areas or turn off filter")
     print()
-    print("Quick fixes:")
-    print("- Add upcoming conferences (next 4-6 months)")
-    print("- Set dates in YYYY-MM-DD format (e.g., 2026-06-15)")
-    print("- Add 'Biologics' to Focus Areas")
-    print("- Check or uncheck 'ICP Filter' as needed")
+    print("="*70)
+    print("HOW TO FIX DATE FORMAT IN AIRTABLE")
+    print("="*70)
+    print()
+    print("If you see dates like '12.1.2026' or '1/12/2026' above:")
+    print()
+    print("1. Open Airtable → Conferences We Attend table")
+    print("2. Click the 'Date' column header")
+    print("3. Click 'Customize field type'")
+    print("4. Change 'Date format' to: ISO (YYYY-MM-DD)")
+    print("5. Make sure 'Include time' is UNCHECKED")
+    print("6. Click 'Save'")
+    print()
+    print("After this change, dates will show as: 2026-01-12")
+    print("And the monitoring system will work!")
+    print()
+    print("Alternative: If the field format won't change, you may need to:")
+    print("1. Create a NEW date field called 'Date ISO'")
+    print("2. Use formula: DATETIME_FORMAT({Date}, 'YYYY-MM-DD')")
+    print("3. Convert it to a regular date field")
+    print("4. Delete old 'Date' field and rename 'Date ISO' to 'Date'")
     print()
 
 
