@@ -187,21 +187,68 @@ Search thoroughly and return all relevant people you find."""
                 if block.type == "text":
                     result_text += block.text
             
-            # Parse JSON
-            result_text = result_text.strip()
-            if result_text.startswith("```json"):
-                result_text = result_text[7:]
-            elif result_text.startswith("```"):
-                result_text = result_text[3:]
-            if result_text.endswith("```"):
-                result_text = result_text[:-3]
+            logger.info(f"  Raw response length: {len(result_text)} chars")
+            
+            # Parse JSON - handle multiple formats
             result_text = result_text.strip()
             
-            data = json.loads(result_text)
-            attendees = data.get('attendees', [])
+            # Try to find JSON in the response
+            json_str = None
             
-            logger.info(f"  ✓ Found {len(attendees)} potential attendees")
-            return attendees
+            # Method 1: Check for markdown code blocks
+            if "```json" in result_text:
+                start = result_text.find("```json") + 7
+                end = result_text.find("```", start)
+                if end > start:
+                    json_str = result_text[start:end].strip()
+            elif "```" in result_text:
+                start = result_text.find("```") + 3
+                end = result_text.find("```", start)
+                if end > start:
+                    json_str = result_text[start:end].strip()
+            
+            # Method 2: Try to find JSON object with curly braces
+            if not json_str and "{" in result_text:
+                start = result_text.find("{")
+                # Find the matching closing brace
+                depth = 0
+                end = start
+                for i in range(start, len(result_text)):
+                    if result_text[i] == "{":
+                        depth += 1
+                    elif result_text[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end > start:
+                    json_str = result_text[start:end].strip()
+            
+            # Method 3: Use entire text if it looks like JSON
+            if not json_str:
+                json_str = result_text
+            
+            # Parse the JSON
+            if not json_str:
+                logger.warning(f"  No JSON found in response")
+                return []
+            
+            try:
+                data = json.loads(json_str)
+                attendees = data.get('attendees', [])
+                
+                if attendees:
+                    logger.info(f"  ✓ Found {len(attendees)} potential attendees")
+                else:
+                    logger.warning(f"  No attendees in parsed JSON")
+                    # Log a sample of the response for debugging
+                    logger.info(f"  Response sample: {result_text[:200]}...")
+                
+                return attendees
+            except json.JSONDecodeError as e:
+                logger.error(f"  JSON parse error: {str(e)}")
+                logger.info(f"  Attempted to parse: {json_str[:200]}...")
+                return []
             
         except Exception as e:
             logger.error(f"  ✗ Error searching for attendees: {str(e)}")
@@ -516,7 +563,12 @@ Role: {role_at_conference}"""
         )
         
         if not attendees:
-            logger.warning("No attendees found")
+            logger.warning(f"No attendees found for {conference_name}")
+            logger.info(f"  This could mean:")
+            logger.info(f"  - Speaker/exhibitor lists not yet published")
+            logger.info(f"  - Conference website doesn't have public attendee info")
+            logger.info(f"  - Search didn't find relevant results")
+            logger.info(f"  Will try again in next monitoring run (2 weeks)")
             return {
                 'conference': conference_name,
                 'attendees_found': 0,
