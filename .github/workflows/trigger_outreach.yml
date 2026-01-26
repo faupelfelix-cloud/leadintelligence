@@ -1,0 +1,65 @@
+name: Generate Trigger Outreach (Automatic)
+
+on:
+  # Run automatically after surveillance (daily)
+  workflow_run:
+    workflows: ["Monitor Leads (Surveillance)"]
+    types:
+      - completed
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max triggers to process (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Generate outreach for new triggers
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        LIMIT="${{ github.event.inputs.limit }}"
+        
+        echo "Generating outreach for new trigger events..."
+        
+        if [ -n "$LIMIT" ]; then
+          python generate_trigger_outreach.py --limit $LIMIT
+        else
+          python generate_trigger_outreach.py
+        fi
+    
+    - name: Upload log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: trigger-outreach-log
+        path: trigger_outreach.log
+        retention-days: 30
