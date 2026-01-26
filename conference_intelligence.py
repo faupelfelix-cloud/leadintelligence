@@ -196,101 +196,135 @@ Return results in this JSON format:
     }}
   ],
   "total_found": 15,
-  "sources_checked": ["List of sources you searched"]
+  "sources_checked": ["List of sources you searched"],
+  "notes": "Any relevant notes about search results"
 }}
 
-IMPORTANT: Return ONLY the JSON, no additional text before or after.
+CRITICAL INSTRUCTIONS:
+1. ALWAYS return valid JSON in the format above - no exceptions
+2. If you find NO attendees, return: {{"attendees": [], "total_found": 0, "sources_checked": [...], "notes": "reason why no attendees found"}}
+3. Do NOT write explanatory text before or after the JSON
+4. Do NOT say "I couldn't find" - just return empty attendees array with notes
 
 Search thoroughly across all sources and return all relevant people you find."""
 
-        try:
-            logger.info(f"  Searching for attendees at {conference_name}...")
-            
-            message = self.anthropic_client.messages.create(
-                model=self.config['anthropic']['model'],
-                max_tokens=4000,
-                tools=[{
-                    "type": "web_search_20250305",
-                    "name": "web_search"
-                }],
-                messages=[{
-                    "role": "user",
-                    "content": search_prompt
-                }]
-            )
-            
-            # Extract text and tool results
-            result_text = ""
-            for block in message.content:
-                if block.type == "text":
-                    result_text += block.text
-            
-            logger.info(f"  Raw response length: {len(result_text)} chars")
-            
-            # Parse JSON - handle multiple formats
-            result_text = result_text.strip()
-            
-            # Try to find JSON in the response
-            json_str = None
-            
-            # Method 1: Check for markdown code blocks
-            if "```json" in result_text:
-                start = result_text.find("```json") + 7
-                end = result_text.find("```", start)
-                if end > start:
-                    json_str = result_text[start:end].strip()
-            elif "```" in result_text:
-                start = result_text.find("```") + 3
-                end = result_text.find("```", start)
-                if end > start:
-                    json_str = result_text[start:end].strip()
-            
-            # Method 2: Try to find JSON object with curly braces
-            if not json_str and "{" in result_text:
-                start = result_text.find("{")
-                # Find the matching closing brace
-                depth = 0
-                end = start
-                for i in range(start, len(result_text)):
-                    if result_text[i] == "{":
-                        depth += 1
-                    elif result_text[i] == "}":
-                        depth -= 1
-                        if depth == 0:
-                            end = i + 1
-                            break
-                if end > start:
-                    json_str = result_text[start:end].strip()
-            
-            # Method 3: Use entire text if it looks like JSON
-            if not json_str:
-                json_str = result_text
-            
-            # Parse the JSON
-            if not json_str:
-                logger.warning(f"  No JSON found in response")
-                return []
-            
+        max_retries = 3
+        retry_delay = 5  # seconds
+        
+        for attempt in range(max_retries + 1):
             try:
+                logger.info(f"  Searching for attendees at {conference_name}...")
+                
+                message = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'],
+                    max_tokens=4000,
+                    tools=[{
+                        "type": "web_search_20250305",
+                        "name": "web_search"
+                    }],
+                    messages=[{
+                        "role": "user",
+                        "content": search_prompt
+                    }]
+                )
+                
+                # Extract text and tool results
+                result_text = ""
+                for block in message.content:
+                    if block.type == "text":
+                        result_text += block.text
+                
+                logger.info(f"  Raw response length: {len(result_text)} chars")
+                
+                # Parse JSON - handle multiple formats
+                result_text = result_text.strip()
+                
+                # Try to find JSON in the response
+                json_str = None
+                
+                # Method 1: Check for markdown code blocks
+                if "```json" in result_text:
+                    start = result_text.find("```json") + 7
+                    end = result_text.find("```", start)
+                    if end > start:
+                        json_str = result_text[start:end].strip()
+                elif "```" in result_text:
+                    start = result_text.find("```") + 3
+                    end = result_text.find("```", start)
+                    if end > start:
+                        json_str = result_text[start:end].strip()
+                
+                # Method 2: Try to find JSON object with curly braces
+                if not json_str and "{" in result_text:
+                    start = result_text.find("{")
+                    # Find the matching closing brace
+                    depth = 0
+                    end = start
+                    for i in range(start, len(result_text)):
+                        if result_text[i] == "{":
+                            depth += 1
+                        elif result_text[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                end = i + 1
+                                break
+                    if end > start:
+                        json_str = result_text[start:end].strip()
+                
+                # Method 3: Use entire text if it looks like JSON
+                if not json_str:
+                    json_str = result_text
+                
+                # Parse the JSON
+                if not json_str:
+                    logger.warning(f"  No JSON found in response")
+                    return []
+                
                 data = json.loads(json_str)
                 attendees = data.get('attendees', [])
                 
                 if attendees:
-                    logger.info(f"  ✓ Found {len(attendees)} potential attendees")
+                    logger.info(f"  Found {len(attendees)} potential attendees")
                 else:
                     logger.warning(f"  No attendees in parsed JSON")
-                    # Log a sample of the response for debugging
-                    logger.info(f"  Response sample: {result_text[:200]}...")
+                    # Show notes if available (explains why no attendees)
+                    notes = data.get('notes', '')
+                    if notes:
+                        logger.info(f"  Search notes: {notes}")
+                    sources = data.get('sources_checked', [])
+                    if sources:
+                        logger.info(f"  Sources checked: {', '.join(sources[:5])}")
+                    else:
+                        # Log a sample of the response for debugging
+                        logger.info(f"  Response sample: {result_text[:200]}...")
                 
                 return attendees
+                
             except json.JSONDecodeError as e:
                 logger.error(f"  JSON parse error: {str(e)}")
-                logger.info(f"  Attempted to parse: {json_str[:200]}...")
+                if json_str:
+                    logger.info(f"  Attempted to parse: {json_str[:200]}...")
                 return []
             
-        except Exception as e:
-            logger.error(f"  ✗ Error searching for attendees: {str(e)}")
-            return []
+            except Exception as e:
+                error_str = str(e)
+                # Check if it's a retryable error (500, 529, 503, etc.)
+                if any(code in error_str for code in ['500', '529', '503', '502', 'overloaded', 'Internal server error']):
+                    if attempt < max_retries:
+                        logger.warning(f"  API error, retrying in {retry_delay}s ({attempt + 1}/{max_retries})...")
+                        import time
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        logger.error(f"  API error after {max_retries} retries: {error_str}")
+                        return []
+                else:
+                    logger.error(f"  Error searching for attendees: {error_str}")
+                    return []
+        
+        # If we get here, all retries failed
+        return []
     
     def quick_company_icp_with_pharma_flag(self, company_name: str) -> tuple:
         """
@@ -853,6 +887,21 @@ Search and assess now."""
     def run(self):
         """Main monitoring workflow"""
         logger.info("Starting Conference Intelligence monitoring...")
+        
+        # Check if feature is enabled
+        features = self.config.get('features', {})
+        conf_intel = features.get('conference_intelligence', {})
+        
+        if not conf_intel.get('enabled', True):  # Default to True for backwards compatibility
+            logger.info("="*60)
+            logger.info("CONFERENCE INTELLIGENCE IS DISABLED")
+            logger.info("="*60)
+            logger.info("To enable, set in config.yaml:")
+            logger.info("  features:")
+            logger.info("    conference_intelligence:")
+            logger.info("      enabled: true")
+            logger.info("="*60)
+            return
         
         # Get conferences to monitor
         conferences = self.get_conferences_to_monitor()
