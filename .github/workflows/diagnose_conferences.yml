@@ -1,0 +1,49 @@
+name: Diagnose Conference Monitoring
+
+on:
+  # Manual trigger only
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Run conference diagnostics
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "=========================================="
+        echo "CONFERENCE MONITORING DIAGNOSTICS"
+        echo "=========================================="
+        echo ""
+        python diagnose_conferences.py
+        echo ""
+        echo "=========================================="
+        echo "Check the output above to see:"
+        echo "  ✅ Which conferences will be monitored"
+        echo "  ❌ Which are skipped and why"
+        echo "  🔧 How to fix issues"
+        echo "=========================================="
