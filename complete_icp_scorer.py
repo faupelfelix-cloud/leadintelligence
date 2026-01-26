@@ -80,64 +80,91 @@ class CompleteICPScorer:
         """
         Load ICP scoring criteria from Airtable
         
-        Returns list of criteria with scoring rules
+        Your table has ONE ROW with 8 COLUMNS:
+        - Company Size Score
+        - Revenue Score
+        - Pipeline Stage Score
+        - Technology Platform Score
+        - Geographic Location Score
+        - Funding Stage Score
+        - Manufacturing Need Score
+        - Product Type Score
+        
+        Each column contains text like:
+        "Criterion: Company Size (Employees)
+        Points (Max 15):
+        - <50: 3 points (startup - low priority)
+        - 50-300: 15 points (lower mid-size - PERFECT FIT)
+        ..."
         """
+        import re
+        
         try:
             criteria_table = self.base.table('ICP Scoring Criteria')
             records = criteria_table.all()
             
+            if not records:
+                logger.warning("ICP Scoring Criteria table is empty")
+                return []
+            
+            logger.info(f"Found {len(records)} record(s) in ICP Scoring Criteria table")
+            
             criteria = []
             
-            for record in records:
-                fields = record['fields']
+            # Get the first (and only) record - it contains all criteria as columns
+            record = records[0]
+            fields = record['fields']
+            
+            logger.info(f"Found {len(fields)} fields in record")
+            
+            for field_name, field_value in fields.items():
+                if not isinstance(field_value, str):
+                    continue
                 
-                # Parse criterion name and max points
-                criterion_text = fields.get('Criterion', '')
-                points_text = fields.get('Points (Max X)', '')
+                # Skip if doesn't look like a criterion
+                if 'Criterion:' not in field_value and 'Points' not in field_value:
+                    continue
                 
-                # Extract criterion name (before "Points")
-                if ':' in criterion_text:
-                    criterion_name = criterion_text.split(':')[1].strip()
-                else:
-                    criterion_name = criterion_text.replace('Criterion', '').strip()
+                text = field_value
                 
-                # Extract max points from the points text
-                max_points = 0
-                if 'Max' in points_text:
-                    # Extract number after "Max"
-                    import re
-                    match = re.search(r'Max (\d+)', points_text)
-                    if match:
-                        max_points = int(match.group(1))
+                # Extract criterion name from "Criterion: Company Size (Employees)"
+                criterion_match = re.search(r'Criterion:\s*([^\n]+)', text)
+                criterion_name = criterion_match.group(1).strip() if criterion_match else field_name
                 
-                # Parse rules from the points text
+                # Extract max points from "Points (Max 15):"
+                max_match = re.search(r'Max\s*(\d+)', text)
+                max_points = int(max_match.group(1)) if max_match else 0
+                
+                # Parse rules - lines that contain points
                 rules = []
-                lines = points_text.split('\n')
+                lines = text.split('\n')
                 for line in lines:
                     line = line.strip()
-                    if ':' in line and 'point' in line.lower():
-                        # Parse lines like "- <50: 3 points (startup - low priority)"
-                        parts = line.split(':')
-                        if len(parts) >= 2:
-                            condition = parts[0].replace('-', '').strip()
-                            rest = parts[1]
-                            
-                            # Extract points
-                            point_match = re.search(r'(\d+)\s*point', rest)
-                            if point_match:
-                                points = int(point_match.group(1))
-                                
-                                # Extract label (text in parentheses)
-                                label = ''
-                                label_match = re.search(r'\((.*?)\)', rest)
-                                if label_match:
-                                    label = label_match.group(1)
-                                
-                                rules.append({
-                                    'condition': condition,
-                                    'points': points,
-                                    'label': label
-                                })
+                    if not line.startswith('-'):
+                        continue
+                    
+                    # Match patterns like:
+                    # "- <50: 3 points (startup - low priority)"
+                    # "- 50-300: 15 points (lower mid-size - PERFECT FIT)"
+                    # "- Purely mammalian (mAbs, bispecifics, ADCs, proteins): 20 points (PERFECT)"
+                    
+                    # Try pattern: condition: X points (label)
+                    rule_match = re.match(r'-\s*([^:]+):\s*(\d+)\s*point', line)
+                    if rule_match:
+                        condition = rule_match.group(1).strip()
+                        points = int(rule_match.group(2))
+                        
+                        # Extract label (text in parentheses after points)
+                        label = ''
+                        label_match = re.search(r'\d+\s*points?\s*\(([^)]+)\)', line)
+                        if label_match:
+                            label = label_match.group(1)
+                        
+                        rules.append({
+                            'condition': condition,
+                            'points': points,
+                            'label': label
+                        })
                 
                 if criterion_name and rules:
                     criteria.append({
@@ -145,13 +172,15 @@ class CompleteICPScorer:
                         'max_points': max_points,
                         'rules': rules
                     })
+                    logger.info(f"  ✓ Loaded: {criterion_name} ({max_points} pts, {len(rules)} rules)")
             
             return criteria
             
         except Exception as e:
             logger.error(f"Error loading ICP criteria: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return []
-    
     def get_total_score(self) -> int:
         """Get total possible ICP score"""
         return sum(c['max_points'] for c in self.criteria)
@@ -286,8 +315,23 @@ Search and assess now."""
                     'reason': 'CDMO/CMO competitor'
                 }
             
-            # Get total score
+            # Get total score - ensure it's an integer
             total_score = data.get('total_score', 0)
+            
+            # Handle case where score is a string or invalid
+            if isinstance(total_score, str):
+                # Try to extract number from string
+                import re
+                match = re.search(r'(\d+)', str(total_score))
+                if match:
+                    total_score = int(match.group(1))
+                else:
+                    logger.warning(f"  Invalid score format: {total_score}, defaulting to 0")
+                    total_score = 0
+            elif not isinstance(total_score, (int, float)):
+                total_score = 0
+            else:
+                total_score = int(total_score)
             
             # Build detailed breakdown
             breakdown = {
