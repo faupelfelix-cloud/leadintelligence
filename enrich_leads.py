@@ -384,6 +384,128 @@ Only return the JSON, no other text."""
                 "error": str(e)
             }
     
+    def generate_general_outreach(self, lead_name: str, title: str, company_name: str,
+                                  lead_icp: int, company_icp: int = None) -> Dict:
+        """Generate general introduction outreach messages during enrichment"""
+        
+        prompt = f"""Generate professional outreach messages for this lead.
+
+LEAD INFORMATION:
+Name: {lead_name}
+Title: {title}
+Company: {company_name}
+Lead ICP Score: {lead_icp}/100
+Company ICP Score: {company_icp if company_icp else 'Unknown'}/105
+
+YOUR COMPANY (Rezon Bio):
+- European CDMO specializing in mammalian cell culture
+- Focus: mAbs, bispecifics, ADCs
+- Target: Mid-size biotechs in Phase 2/3 or commercial
+- Positioning: Cost-efficient European quality vs. Western CDMOs
+- Strengths: Biosimilar track record, Sandoz-qualified, agile mid-size partner
+
+Generate FOUR brief, natural outreach messages:
+
+═══════════════════════════════════════════════════════════
+MESSAGE 1: EMAIL (120-150 words)
+═══════════════════════════════════════════════════════════
+Subject: [Natural subject line]
+
+Requirements:
+- Natural, conversational opener
+- Reference their role/company naturally
+- Suggest why Rezon might be relevant (no bullet lists)
+- Soft CTA - question or suggestion to connect
+- Sign as: "Best regards, [Your Name], Rezon Bio Business Development"
+
+═══════════════════════════════════════════════════════════
+MESSAGE 2: LINKEDIN CONNECTION REQUEST (180-200 chars)
+═══════════════════════════════════════════════════════════
+Requirements:
+- Very brief, friendly
+- Reference their role or company
+- No signature needed
+
+═══════════════════════════════════════════════════════════
+MESSAGE 3: LINKEDIN SHORT MESSAGE (300-400 chars)
+═══════════════════════════════════════════════════════════
+For after connection accepted.
+
+Requirements:
+- Conversational opener
+- Reference their background or role
+- Suggest why connecting makes sense
+- End with: "Best regards, [Your Name], Rezon Bio BD"
+
+═══════════════════════════════════════════════════════════
+MESSAGE 4: LINKEDIN INMAIL (250-350 words)
+═══════════════════════════════════════════════════════════
+Subject: [Natural, not salesy]
+
+Requirements:
+- Open with observation about their work/company
+- Share relevant perspective (not sales pitch)
+- Sound like industry peer conversation
+- Weave in why Rezon might be relevant
+- Natural next step suggestion
+- NO bullet lists - paragraphs only
+- Sign as: "Best regards, [Your Name], Rezon Bio Business Development"
+
+CRITICAL STYLE RULES:
+- Natural, human language (slightly imperfect is fine)
+- NO bullet lists anywhere
+- NO ** for emphasis
+- Show knowledge, don't tell them their situation
+- About THEM, not about us
+- Conversational, not corporate
+- Use [Your Name] as placeholder
+
+Return in this JSON format:
+{{
+  "email_subject": "Subject here",
+  "email_body": "Body with signature using [Your Name] placeholder",
+  "linkedin_connection": "Connection request (under 200 chars, no signature)",
+  "linkedin_short": "Short message ending with 'Best regards, [Your Name], Rezon Bio BD'",
+  "linkedin_inmail_subject": "InMail subject",
+  "linkedin_inmail_body": "InMail body ending with 'Best regards, [Your Name], Rezon Bio Business Development'"
+}}
+
+Only return valid JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=2000,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
+            )
+            
+            # Extract text
+            result_text = ""
+            for block in message.content:
+                if block.type == "text":
+                    result_text += block.text
+            
+            # Clean JSON
+            result_text = result_text.strip()
+            if result_text.startswith("```json"):
+                result_text = result_text[7:]
+            elif result_text.startswith("```"):
+                result_text = result_text[3:]
+            if result_text.endswith("```"):
+                result_text = result_text[:-3]
+            result_text = result_text.strip()
+            
+            # Parse
+            messages_data = json.loads(result_text)
+            return messages_data
+            
+        except Exception as e:
+            logger.error(f"Failed to generate outreach: {str(e)}")
+            return None
+    
     def update_lead_record(self, record_id: str, enriched_data: Dict):
         """Update Airtable lead record with enriched data"""
         
@@ -470,6 +592,7 @@ Only return the JSON, no other text."""
         
         # Calculate Lead ICP Score
         # Get company ICP if lead is linked to company
+        lead_icp_score = None
         try:
             existing_record = self.leads_table.get(record_id)
             company_ids = existing_record['fields'].get('Company', [])
@@ -499,6 +622,33 @@ Only return the JSON, no other text."""
                 logger.info(f"  Lead ICP: {lead_icp_score}/100 ({lead_icp_tier})")
         except Exception as e:
             logger.warning(f"  Could not calculate Lead ICP: {str(e)}")
+        
+        # Generate General Outreach Messages
+        # Only generate if Lead ICP is acceptable (40+)
+        if lead_icp_score and lead_icp_score >= 40:
+            try:
+                logger.info(f"  Generating general outreach messages...")
+                outreach_messages = self.generate_general_outreach(
+                    lead_name=existing_record['fields'].get('Lead Name', ''),
+                    title=enriched_data.get('title', ''),
+                    company_name=existing_record['fields'].get('Company Name', ''),
+                    lead_icp=lead_icp_score,
+                    company_icp=company_icp
+                )
+                
+                if outreach_messages:
+                    update_fields['Email Subject'] = outreach_messages.get('email_subject', '')
+                    update_fields['Email Body'] = outreach_messages.get('email_body', '')
+                    update_fields['LinkedIn Connection Request'] = outreach_messages.get('linkedin_connection', '')
+                    update_fields['LinkedIn Short Message'] = outreach_messages.get('linkedin_short', '')
+                    update_fields['LinkedIn InMail Subject'] = outreach_messages.get('linkedin_inmail_subject', '')
+                    update_fields['LinkedIn InMail Body'] = outreach_messages.get('linkedin_inmail_body', '')
+                    update_fields['Message Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                    logger.info(f"  ✓ Outreach messages generated")
+            except Exception as e:
+                logger.warning(f"  Could not generate outreach: {str(e)}")
+        else:
+            logger.info(f"  Skipping outreach (Lead ICP too low: {lead_icp_score})")
         
         # Update the record with error handling
         try:
