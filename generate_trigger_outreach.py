@@ -73,14 +73,29 @@ class TriggerOutreachGenerator:
     def get_triggers_for_outreach(self, limit: Optional[int] = None) -> List[Dict]:
         """Get triggers that need outreach messages generated"""
         
-        # Find triggers with Status = "New" and no Email Body yet
-        formula = "AND({Status} = 'New', OR({Email Body} = BLANK(), {Email Body} = ''))"
-        triggers = self.trigger_history_table.all(formula=formula)
+        # Find triggers with Status = "New"
+        # We'll check for missing outreach in Python since field names may vary
+        formula = "{Status} = 'New'"
+        all_triggers = self.trigger_history_table.all(formula=formula)
+        
+        # Filter to only those without outreach generated
+        triggers = []
+        for trigger in all_triggers:
+            fields = trigger['fields']
+            # Check if outreach already generated (try multiple possible field names)
+            has_outreach = (
+                fields.get('Email Body') or 
+                fields.get('Email body') or
+                fields.get('Outreach Messages') or
+                fields.get('Outreach Generated Date')
+            )
+            if not has_outreach:
+                triggers.append(trigger)
         
         if limit:
             triggers = triggers[:limit]
         
-        logger.info(f"Found {len(triggers)} triggers needing outreach")
+        logger.info(f"Found {len(triggers)} triggers needing outreach (out of {len(all_triggers)} with Status=New)")
         return triggers
     
     def get_lead_context(self, lead_ids: list) -> Dict:
@@ -432,6 +447,7 @@ Only return valid JSON, no other text."""
         total = len(triggers)
         success_count = 0
         failed_count = 0
+        skipped_no_lead = 0  # Track orphan triggers separately
         
         for idx, trigger in enumerate(triggers, 1):
             record_id = trigger['id']
@@ -440,8 +456,8 @@ Only return valid JSON, no other text."""
             # Get lead info
             lead_ids = fields.get('Lead', [])
             if not lead_ids:
-                logger.warning(f"[{idx}/{total}] Trigger has no lead - skipping")
-                failed_count += 1
+                logger.warning(f"[{idx}/{total}] Trigger has no lead - skipping (run cleanup_orphan_triggers.py to fix)")
+                skipped_no_lead += 1
                 continue
             
             lead_context = self.get_lead_context(lead_ids)
@@ -481,9 +497,12 @@ Only return valid JSON, no other text."""
         logger.info("")
         logger.info("=" * 60)
         logger.info("TRIGGER OUTREACH GENERATION COMPLETE")
-        logger.info(f"Total: {total} | Success: {success_count} | Failed: {failed_count}")
+        logger.info(f"Total: {total} | Success: {success_count} | Failed: {failed_count} | Skipped (no lead): {skipped_no_lead}")
+        if skipped_no_lead > 0:
+            logger.info(f"TIP: Run 'python cleanup_orphan_triggers.py --link' to fix orphan triggers")
         logger.info("=" * 60)
         
+        # Only count actual failures, not skipped orphans
         return failed_count == 0
 
 
