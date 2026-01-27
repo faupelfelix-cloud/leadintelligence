@@ -1,0 +1,82 @@
+name: Generate Campaign Outreach
+
+on:
+  # Manual trigger with campaign type selection
+  workflow_dispatch:
+    inputs:
+      campaign_type:
+        description: 'Campaign Type (leave empty for all)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - 'Conference'
+          - 'Webinar'
+          - 'Trade Show'
+          - 'Partnership Event'
+          - 'Workshop'
+          - 'Post-Event Follow-up'
+          - 'Custom'
+      limit:
+        description: 'Max leads to process (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  generate-outreach:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Generate campaign outreach
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "=============================================="
+        echo "CAMPAIGN OUTREACH GENERATOR"
+        echo "Date: $(date)"
+        echo "Campaign Type: ${{ github.event.inputs.campaign_type || 'All' }}"
+        echo "Limit: ${{ github.event.inputs.limit || 'No limit' }}"
+        echo "=============================================="
+        
+        # Build command with optional parameters
+        CMD="python generate_campaign_outreach.py"
+        
+        if [ -n "${{ github.event.inputs.campaign_type }}" ]; then
+          CMD="$CMD --campaign-type '${{ github.event.inputs.campaign_type }}'"
+        fi
+        
+        if [ -n "${{ github.event.inputs.limit }}" ]; then
+          CMD="$CMD --limit ${{ github.event.inputs.limit }}"
+        fi
+        
+        eval $CMD
+    
+    - name: Upload log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: campaign-outreach-log-${{ github.run_number }}
+        path: campaign_outreach.log
+        retention-days: 90
