@@ -199,13 +199,13 @@ class CampaignLeadsProcessor:
             all_records = self.campaign_leads_table.all()
             
             if enrich_only:
-                # Only get leads with Enrich checked and not yet linked
+                # Only get leads with Enrich Lead checked and not yet linked
                 return [r for r in all_records 
-                        if r['fields'].get('Enrich') 
+                        if r['fields'].get('Enrich Lead') 
                         and not r['fields'].get('Linked Lead')]
             else:
-                # Get leads with Enrich checked
-                return [r for r in all_records if r['fields'].get('Enrich')]
+                # Get leads with Enrich Lead checked
+                return [r for r in all_records if r['fields'].get('Enrich Lead')]
                 
         except Exception as e:
             logger.error(f"Error getting campaign leads: {e}")
