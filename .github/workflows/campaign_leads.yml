@@ -38,11 +38,15 @@ jobs:
         run: |
           pip install pyairtable anthropic pyyaml
       
-      - name: Process campaign leads
+      - name: Create config from secrets
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python setup.py
+      
+      - name: Process campaign leads
         run: |
           CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type }}"
           LIMIT="${{ github.event.inputs.limit }}"
