@@ -235,14 +235,38 @@ Only return valid JSON, no other text."""
                     result_text += block.text
             
             # Parse JSON from response
-            # Remove markdown code blocks if present
             result_text = result_text.strip()
+            
+            # Check if we got any response
+            if not result_text:
+                logger.warning(f"Empty response for {company_name}")
+                return {
+                    "confidence": "Failed",
+                    "error": "Empty response from AI"
+                }
+            
+            # Remove markdown code blocks if present
             if result_text.startswith("```json"):
                 result_text = result_text[7:]
             if result_text.startswith("```"):
                 result_text = result_text[3:]
             if result_text.endswith("```"):
                 result_text = result_text[:-3]
+            
+            result_text = result_text.strip()
+            
+            # Find JSON object in response
+            if not result_text.startswith("{"):
+                start = result_text.find("{")
+                if start != -1:
+                    end = result_text.rfind("}") + 1
+                    result_text = result_text[start:end]
+                else:
+                    logger.warning(f"No JSON found in response for {company_name}")
+                    return {
+                        "confidence": "Failed",
+                        "error": "No JSON in response"
+                    }
             
             result = json.loads(result_text.strip())
             logger.info(f"Successfully enriched {company_name}")
