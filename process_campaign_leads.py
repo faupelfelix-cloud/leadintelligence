@@ -213,8 +213,7 @@ Return ONLY valid JSON:
     "x_profile": "https://x.com/...",
     "verified_title": "Current Title",
     "lead_icp_score": 75,
-    "lead_icp_tier": "Tier 2 (Strong Fit)",
-    "lead_icp_justification": "Brief scoring breakdown"
+    "lead_icp_justification": "Title: VP Manufacturing (25), Seniority: VP (18), Function: Manufacturing (20), Decision: Budget (15), Geography: Europe (5) = 83"
 }}"""
 
         try:
@@ -282,14 +281,9 @@ Return ONLY valid JSON:
     "website": "https://...",
     "linkedin_page": "https://linkedin.com/company/...",
     "location": "City, Country",
-    "company_size": "~150 employees",
-    "focus_area": "Oncology, Immunology",
-    "technology_platform": "Bispecific antibodies, ADCs",
-    "pipeline_info": "2 Phase 2, 3 Phase 1 candidates",
-    "funding_stage": "Series C",
+    "pipeline_info": "2 Phase 2, 3 Phase 1 candidates in oncology using bispecific platform",
     "icp_score": 82,
-    "icp_tier": "Strong Fit",
-    "icp_justification": "Scoring breakdown",
+    "icp_justification": "Location: Europe (20), Technology: Mammalian bispecifics (25), Pipeline: Phase 2 (20), Size: ~150 (15), Funding: Series C (15), No CDMO (10) = 105 - minus 23 for X = 82",
     "is_excluded": false,
     "exclusion_reason": ""
 }}"""
@@ -325,18 +319,19 @@ Return ONLY valid JSON:
     def create_lead_in_main_table(self, lead_data: Dict, company_record_id: Optional[str] = None) -> Optional[str]:
         """Create a new lead in the main Leads table"""
         try:
+            # Only use text/number/URL/date fields to avoid select permission issues
             fields = {
                 'Lead Name': lead_data.get('name', ''),
-                'Title': lead_data.get('title', ''),
+                'Title': lead_data.get('verified_title') or lead_data.get('title', ''),
                 'Email': lead_data.get('email', ''),
                 'LinkedIn URL': lead_data.get('linkedin_url', ''),
                 'X Profile': lead_data.get('x_profile', ''),
                 'Lead ICP Score': lead_data.get('lead_icp_score'),
-                'Lead ICP Tier': lead_data.get('lead_icp_tier', ''),
                 'Lead ICP Justification': lead_data.get('lead_icp_justification', ''),
-                'Enrichment Status': 'Enriched',
                 'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d')
             }
+            
+            # Skip single-select fields (Lead ICP Tier, Enrichment Status) to avoid permission errors
             
             if company_record_id:
                 fields['Company'] = [company_record_id]
@@ -352,36 +347,21 @@ Return ONLY valid JSON:
     def create_company_in_main_table(self, company_data: Dict) -> Optional[str]:
         """Create a new company in the main Companies table"""
         try:
+            # Only use text/number/URL fields to avoid select permission issues
             fields = {
                 'Company Name': company_data.get('name', ''),
                 'Website': company_data.get('website', ''),
                 'LinkedIn Company Page': company_data.get('linkedin_page', ''),
                 'Location/HQ': company_data.get('location', ''),
                 'Lead Programs': company_data.get('pipeline_info', ''),
-                'Funding Stage': company_data.get('funding_stage', ''),
                 'ICP Fit Score': company_data.get('icp_score'),
                 'ICP Score Justification': company_data.get('icp_justification', ''),
                 'Enrichment Status': 'Enriched'
             }
             
-            # Handle multi-select fields (need arrays)
-            if company_data.get('focus_area'):
-                # Convert string to array if needed
-                focus = company_data.get('focus_area', '')
-                if isinstance(focus, str):
-                    fields['Focus Area'] = [f.strip() for f in focus.split(',')]
-                else:
-                    fields['Focus Area'] = focus
-            
-            if company_data.get('technology_platform'):
-                tech = company_data.get('technology_platform', '')
-                if isinstance(tech, str):
-                    fields['Technology Platform'] = [t.strip() for t in tech.split(',')]
-                else:
-                    fields['Technology Platform'] = tech
-            
-            if company_data.get('company_size'):
-                fields['Company Size'] = company_data.get('company_size', '')
+            # Skip multi-select fields (Focus Area, Technology Platform, Pipeline Stage)
+            # and single-select fields (Funding Stage, Company Size) to avoid permission errors
+            # These can be filled in manually or via Airtable automation
             
             # Clean empty values
             fields = {k: v for k, v in fields.items() if v}
@@ -402,20 +382,13 @@ Return ONLY valid JSON:
         try:
             update = {}
             
-            # Try to set enrichment status (skip if field doesn't exist)
-            try:
-                update['Enrichment Status'] = status
-            except:
-                pass
-            
             # Link to main tables - these must be Link fields in Airtable
-            # Only add if we have valid record IDs
             if lead_record_id:
                 update['Linked Lead'] = [lead_record_id]
             if company_record_id:
                 update['Linked Company'] = [company_record_id]
             
-            # Lead data - only add fields that exist
+            # Lead data - only text/number fields
             if lead_data:
                 email = lead_data.get('Email') or lead_data.get('email')
                 if email:
@@ -425,16 +398,12 @@ Return ONLY valid JSON:
                 if linkedin:
                     update['LinkedIn URL'] = linkedin
                 
-                # ICP scores
+                # ICP score (number field)
                 lead_icp = lead_data.get('Lead ICP Score') or lead_data.get('lead_icp_score')
                 if lead_icp:
                     update['Lead ICP Score'] = lead_icp
-                    
-                lead_tier = lead_data.get('Lead ICP Tier') or lead_data.get('lead_icp_tier')
-                if lead_tier:
-                    update['Lead ICP Tier'] = lead_tier
             
-            # Company ICP data
+            # Company ICP score (number field)
             if company_data:
                 company_icp = company_data.get('ICP Fit Score') or company_data.get('icp_score')
                 if company_icp:
@@ -447,10 +416,15 @@ Return ONLY valid JSON:
             
         except Exception as e:
             logger.error(f"  Error updating campaign lead: {e}")
-            # Try minimal update without links
+            # Try update without link fields (in case they don't exist)
             try:
-                minimal_update = {'Enrichment Status': status}
-                self.campaign_leads_table.update(record_id, minimal_update)
+                minimal_update = {}
+                if lead_data:
+                    email = lead_data.get('Email') or lead_data.get('email')
+                    if email:
+                        minimal_update['Email'] = email
+                if minimal_update:
+                    self.campaign_leads_table.update(record_id, minimal_update)
                 logger.info(f"  ⚠ Updated with minimal fields only")
                 return True
             except:
