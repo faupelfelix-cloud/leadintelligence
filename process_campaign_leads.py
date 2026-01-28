@@ -262,47 +262,11 @@ class CampaignLeadsProcessor:
                                    campaign_context: Dict = None) -> Dict[str, str]:
         """Generate personalized outreach messages with campaign context"""
         
-        # === LEAD DATA ===
+        # === BASIC INFO ===
         name = lead_fields.get('Lead Name', 'there')
-        first_name = name.split()[0] if name != 'there' else 'there'
         title = lead_fields.get('Title', '')
-        lead_linkedin = lead_fields.get('LinkedIn URL', '')
-        lead_notes = lead_fields.get('Intelligence Notes', '')
-        lead_icp_score = lead_fields.get('Lead ICP Score', '')
-        
-        # === COMPANY DATA ===
         company = company_fields.get('Company Name', '')
         location = company_fields.get('Location/HQ', '')
-        website = company_fields.get('Website', '')
-        
-        # Pipeline & Technology
-        pipeline = company_fields.get('Lead Programs', '')
-        focus_areas = company_fields.get('Focus Area', [])
-        if isinstance(focus_areas, list):
-            focus_areas = ', '.join(focus_areas)
-        tech_platform = company_fields.get('Technology Platform', [])
-        if isinstance(tech_platform, list):
-            tech_platform = ', '.join(tech_platform)
-        therapeutic_areas = company_fields.get('Therapeutic Areas', [])
-        if isinstance(therapeutic_areas, list):
-            therapeutic_areas = ', '.join(therapeutic_areas)
-        pipeline_stage = company_fields.get('Pipeline Stage', [])
-        if isinstance(pipeline_stage, list):
-            pipeline_stage = ', '.join(pipeline_stage)
-        
-        # Funding & Business Info
-        funding_stage = company_fields.get('Funding Stage', '')
-        latest_funding = company_fields.get('Latest Funding Round', '')
-        total_funding = company_fields.get('Total Funding', '')
-        
-        # Manufacturing & CDMO
-        cdmo_partnerships = company_fields.get('Current CDMO Partnerships', '')
-        manufacturing_status = company_fields.get('Manufacturing Status', '')
-        
-        # Intelligence
-        company_notes = company_fields.get('Intelligence Notes', '')
-        company_icp_score = company_fields.get('ICP Fit Score', '')
-        icp_justification = company_fields.get('ICP Score Justification', '')
         
         # === CAMPAIGN CONTEXT ===
         campaign_context = campaign_context or {}
@@ -311,94 +275,102 @@ class CampaignLeadsProcessor:
         campaign_background = campaign_context.get('Campaign Background', '')
         campaign_date = campaign_context.get('Campaign Date', '')
         
-        # Build campaign-specific instructions
-        campaign_instructions = ""
+        # === COMPANY CONTEXT (brief, not exhaustive) ===
+        # Only include key points that would naturally come up in conversation
+        company_context = []
+        
+        pipeline = company_fields.get('Lead Programs', '')
+        if pipeline:
+            company_context.append(f"Pipeline: {pipeline[:200]}")  # Truncate
+        
+        tech_platform = company_fields.get('Technology Platform', [])
+        if tech_platform:
+            if isinstance(tech_platform, list):
+                tech_platform = ', '.join(tech_platform)
+            company_context.append(f"Technology: {tech_platform}")
+        
+        therapeutic = company_fields.get('Therapeutic Areas', [])
+        if therapeutic:
+            if isinstance(therapeutic, list):
+                therapeutic = ', '.join(therapeutic)
+            company_context.append(f"Focus: {therapeutic}")
+        
+        company_context_text = '\n'.join(company_context) if company_context else 'General biotech'
+        
+        # === BUILD CAMPAIGN-SPECIFIC PROMPT ===
+        campaign_section = ""
         if campaign_type == 'Conference' and conference_name:
-            campaign_instructions = f"""
-CAMPAIGN CONTEXT:
-This is a CONFERENCE outreach campaign for {conference_name}.
-Conference Date: {campaign_date}
-Campaign Background: {campaign_background}
+            campaign_section = f"""
+CAMPAIGN: Conference outreach for {conference_name}
+Date: {campaign_date}
+Background: {campaign_background}
 
-IMPORTANT: The messages MUST reference the conference as the reason for reaching out.
-- Mention you'll be attending/looking forward to {conference_name}
-- Suggest meeting at the conference
-- Reference the conference as a natural networking opportunity
+This is conference outreach - the conference is the REASON for reaching out.
+- Mention you'll be at {conference_name}
+- Suggest meeting at the event
+- Keep it natural - like reaching out to someone you'd like to meet
 """
         elif campaign_background:
-            campaign_instructions = f"""
-CAMPAIGN CONTEXT:
-Campaign Type: {campaign_type}
-Campaign Background: {campaign_background}
+            campaign_section = f"""
+CAMPAIGN CONTEXT: {campaign_background}
 
-IMPORTANT: Use the campaign background as context for the outreach. 
-- Reference the campaign reason naturally in your messages
-- Tie Rezon Bio's offerings to the specific context/opportunity mentioned
-- Make the outreach feel timely and relevant based on this context
-"""
-        elif campaign_type and campaign_type != 'general':
-            campaign_instructions = f"""
-CAMPAIGN CONTEXT:
-Campaign Type: {campaign_type}
-
-Tailor the messaging style appropriately for this type of campaign.
+Use this context as the natural reason for reaching out.
 """
         
-        # Build comprehensive company intel section
-        company_intel = []
-        if pipeline:
-            company_intel.append(f"Pipeline Programs: {pipeline}")
-        if tech_platform:
-            company_intel.append(f"Technology: {tech_platform}")
-        if therapeutic_areas:
-            company_intel.append(f"Therapeutic Focus: {therapeutic_areas}")
-        if pipeline_stage:
-            company_intel.append(f"Development Stage: {pipeline_stage}")
-        if latest_funding:
-            company_intel.append(f"Recent Funding: {latest_funding}")
-        if cdmo_partnerships:
-            company_intel.append(f"CDMO Status: {cdmo_partnerships}")
-        if manufacturing_status:
-            company_intel.append(f"Manufacturing: {manufacturing_status}")
-        if company_notes:
-            company_intel.append(f"Additional Intel: {company_notes[:500]}")
-        
-        company_intel_text = '\n'.join(company_intel) if company_intel else 'No detailed intel available'
-        
-        prompt = f"""Generate personalized outreach messages for a biologics CDMO targeting biotech companies.
+        prompt = f"""You are writing business development outreach for a European biologics CDMO.
 
-LEAD INFORMATION:
-- Name: {name}
-- Title: {title}
-- Company: {company}
-- Location: {location}
+LEAD: {name}, {title} at {company} ({location})
 
-COMPANY INTELLIGENCE (use this to personalize!):
-{company_intel_text}
+COMPANY BACKGROUND:
+{company_context_text}
+{campaign_section}
+REZON BIO (your company):
+European CDMO specializing in mammalian CHO cell culture for mAbs, bispecifics, and ADCs.
+Target: Mid-size biotechs needing manufacturing support.
 
-LEAD FIT: ICP Score {lead_icp_score}/100 (Company: {company_icp_score}/105)
-{campaign_instructions}
-REZON BIO CONTEXT:
-Rezon Bio is a European biologics CDMO specializing in:
-- Mammalian cell culture (CHO)
-- Monoclonal antibodies, bispecific antibodies, ADCs
-- Process development through commercial manufacturing
-- European quality standards with competitive pricing
+═══════════════════════════════════════════════════════════
+STYLE RULES - CRITICAL:
+═══════════════════════════════════════════════════════════
+1. **Natural, human language** - slightly imperfect is fine
+2. **NO bullet lists** anywhere - weave points into sentences
+3. **NO ** for bold** - clean formatting only
+4. **Show you know them, don't tell them their situation**
+   BAD: "Your company focuses on oncology and has Phase 2 programs"
+   GOOD: "Given your work in oncology..."
+5. **About THEM, not about us** - lead with their context
+6. **Soft CTA** - "would be great to connect" not "let's schedule a call"
+7. **Don't overload with intel** - pick 1-2 relevant details max
+8. **Sound like a human wrote it** - not an AI that scraped their LinkedIn
 
-PERSONALIZATION REQUIREMENTS:
-- Reference specific details about their pipeline, technology, or therapeutic focus
-- If they have no CDMO partner, emphasize partnership opportunity
-- If they recently raised funding, reference growth/scaling needs
-- Match your language to their development stage (early = flexibility, late = scale/quality)
+═══════════════════════════════════════════════════════════
+GENERATE FOUR MESSAGES:
+═══════════════════════════════════════════════════════════
 
-Return ONLY valid JSON (no markdown, no extra text):
+MESSAGE 1: EMAIL (100-130 words)
+Subject: [Natural, references their context or the conference]
+Body: Conversational, references campaign context naturally, soft CTA
+Sign: "Best regards, [Your Name]"
+
+MESSAGE 2: LINKEDIN CONNECTION (under 200 chars)
+Brief, friendly, reference their role or company or conference
+No signature
+
+MESSAGE 3: LINKEDIN INMAIL 
+Subject: [Natural, not salesy]
+Body: 80-100 words, conversational, references their work
+Sign: "Best, [Your Name]"
+
+MESSAGE 4: LINKEDIN SHORT (under 180 chars)
+Very brief follow-up style message
+
+Return ONLY valid JSON:
 {{
-    "email_subject": "Subject line under 60 chars",
-    "email_body": "Email body 100-150 words max. Reference their specific situation. Clear CTA.",
-    "linkedin_connection": "Connection request under 280 chars",
-    "linkedin_inmail_subject": "InMail subject",
-    "linkedin_inmail_body": "InMail body 80-120 words",
-    "linkedin_short": "Follow-up under 180 chars"
+    "email_subject": "Subject",
+    "email_body": "Body with signature",
+    "linkedin_connection": "Under 200 chars, no signature",
+    "linkedin_inmail_subject": "Subject",
+    "linkedin_inmail_body": "Body with signature",
+    "linkedin_short": "Under 180 chars"
 }}"""
 
         try:
