@@ -262,17 +262,49 @@ class CampaignLeadsProcessor:
                                    campaign_context: Dict = None) -> Dict[str, str]:
         """Generate personalized outreach messages with campaign context"""
         
+        # === LEAD DATA ===
         name = lead_fields.get('Lead Name', 'there')
         first_name = name.split()[0] if name != 'there' else 'there'
         title = lead_fields.get('Title', '')
+        lead_linkedin = lead_fields.get('LinkedIn URL', '')
+        lead_notes = lead_fields.get('Intelligence Notes', '')
+        lead_icp_score = lead_fields.get('Lead ICP Score', '')
+        
+        # === COMPANY DATA ===
         company = company_fields.get('Company Name', '')
         location = company_fields.get('Location/HQ', '')
+        website = company_fields.get('Website', '')
+        
+        # Pipeline & Technology
         pipeline = company_fields.get('Lead Programs', '')
         focus_areas = company_fields.get('Focus Area', [])
         if isinstance(focus_areas, list):
             focus_areas = ', '.join(focus_areas)
+        tech_platform = company_fields.get('Technology Platform', [])
+        if isinstance(tech_platform, list):
+            tech_platform = ', '.join(tech_platform)
+        therapeutic_areas = company_fields.get('Therapeutic Areas', [])
+        if isinstance(therapeutic_areas, list):
+            therapeutic_areas = ', '.join(therapeutic_areas)
+        pipeline_stage = company_fields.get('Pipeline Stage', [])
+        if isinstance(pipeline_stage, list):
+            pipeline_stage = ', '.join(pipeline_stage)
         
-        # Campaign context
+        # Funding & Business Info
+        funding_stage = company_fields.get('Funding Stage', '')
+        latest_funding = company_fields.get('Latest Funding Round', '')
+        total_funding = company_fields.get('Total Funding', '')
+        
+        # Manufacturing & CDMO
+        cdmo_partnerships = company_fields.get('Current CDMO Partnerships', '')
+        manufacturing_status = company_fields.get('Manufacturing Status', '')
+        
+        # Intelligence
+        company_notes = company_fields.get('Intelligence Notes', '')
+        company_icp_score = company_fields.get('ICP Fit Score', '')
+        icp_justification = company_fields.get('ICP Score Justification', '')
+        
+        # === CAMPAIGN CONTEXT ===
         campaign_context = campaign_context or {}
         campaign_type = campaign_context.get('Campaign Type', 'general')
         conference_name = campaign_context.get('Conference Name', '')
@@ -312,6 +344,27 @@ Campaign Type: {campaign_type}
 Tailor the messaging style appropriately for this type of campaign.
 """
         
+        # Build comprehensive company intel section
+        company_intel = []
+        if pipeline:
+            company_intel.append(f"Pipeline Programs: {pipeline}")
+        if tech_platform:
+            company_intel.append(f"Technology: {tech_platform}")
+        if therapeutic_areas:
+            company_intel.append(f"Therapeutic Focus: {therapeutic_areas}")
+        if pipeline_stage:
+            company_intel.append(f"Development Stage: {pipeline_stage}")
+        if latest_funding:
+            company_intel.append(f"Recent Funding: {latest_funding}")
+        if cdmo_partnerships:
+            company_intel.append(f"CDMO Status: {cdmo_partnerships}")
+        if manufacturing_status:
+            company_intel.append(f"Manufacturing: {manufacturing_status}")
+        if company_notes:
+            company_intel.append(f"Additional Intel: {company_notes[:500]}")
+        
+        company_intel_text = '\n'.join(company_intel) if company_intel else 'No detailed intel available'
+        
         prompt = f"""Generate personalized outreach messages for a biologics CDMO targeting biotech companies.
 
 LEAD INFORMATION:
@@ -319,8 +372,11 @@ LEAD INFORMATION:
 - Title: {title}
 - Company: {company}
 - Location: {location}
-- Focus Areas: {focus_areas}
-- Pipeline: {pipeline}
+
+COMPANY INTELLIGENCE (use this to personalize!):
+{company_intel_text}
+
+LEAD FIT: ICP Score {lead_icp_score}/100 (Company: {company_icp_score}/105)
 {campaign_instructions}
 REZON BIO CONTEXT:
 Rezon Bio is a European biologics CDMO specializing in:
@@ -329,13 +385,16 @@ Rezon Bio is a European biologics CDMO specializing in:
 - Process development through commercial manufacturing
 - European quality standards with competitive pricing
 
-OUTREACH REQUIREMENTS:
-Generate 4 personalized, professional messages. Keep them concise.
+PERSONALIZATION REQUIREMENTS:
+- Reference specific details about their pipeline, technology, or therapeutic focus
+- If they have no CDMO partner, emphasize partnership opportunity
+- If they recently raised funding, reference growth/scaling needs
+- Match your language to their development stage (early = flexibility, late = scale/quality)
 
 Return ONLY valid JSON (no markdown, no extra text):
 {{
     "email_subject": "Subject line under 60 chars",
-    "email_body": "Email body 100-150 words max. Clear CTA.",
+    "email_body": "Email body 100-150 words max. Reference their specific situation. Clear CTA.",
     "linkedin_connection": "Connection request under 280 chars",
     "linkedin_inmail_subject": "InMail subject",
     "linkedin_inmail_body": "InMail body 80-120 words",
