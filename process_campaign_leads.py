@@ -260,7 +260,8 @@ Find:
 5. Focus area (oncology, immunology, rare disease, etc.)
 6. Technology platform (mAbs, bispecifics, ADCs, cell therapy, gene therapy)
 7. Pipeline stage (preclinical, Phase 1, Phase 2, Phase 3, commercial)
-8. Recent funding
+8. Recent funding (latest round, total raised)
+9. Current CDMO partnerships (if known)
 
 Calculate Company ICP Score (0-105) for biologics CDMO:
 
@@ -281,9 +282,16 @@ Return ONLY valid JSON:
     "website": "https://...",
     "linkedin_page": "https://linkedin.com/company/...",
     "location": "City, Country",
+    "employee_count": "~150 employees",
+    "focus_areas": "Oncology, Immunology",
+    "technology": "Bispecific antibodies, ADCs",
     "pipeline_info": "2 Phase 2, 3 Phase 1 candidates in oncology using bispecific platform",
+    "latest_funding": "Series C ($50M) in 2024",
+    "total_funding": 120000000,
+    "cdmo_partnerships": "None known" or "Working with Lonza for X",
     "icp_score": 82,
     "icp_justification": "Location: Europe (20), Technology: Mammalian bispecifics (25), Pipeline: Phase 2 (20), Size: ~150 (15), Funding: Series C (15), No CDMO (10) = 105 - minus 23 for X = 82",
+    "urgency_score": 75,
     "is_excluded": false,
     "exclusion_reason": ""
 }}"""
@@ -356,15 +364,32 @@ Return ONLY valid JSON:
                 'Lead Programs': company_data.get('pipeline_info', ''),
                 'ICP Fit Score': company_data.get('icp_score'),
                 'ICP Score Justification': company_data.get('icp_justification', ''),
-                'Enrichment Status': 'Enriched'
+                'Current CDMO Partnerships': company_data.get('cdmo_partnerships', ''),
+                'Latest Funding Round': company_data.get('latest_funding', ''),
+                'Urgency Score': company_data.get('urgency_score'),
             }
             
-            # Skip multi-select fields (Focus Area, Technology Platform, Pipeline Stage)
-            # and single-select fields (Funding Stage, Company Size) to avoid permission errors
-            # These can be filled in manually or via Airtable automation
+            # Total Funding (currency field - just needs a number)
+            if company_data.get('total_funding'):
+                fields['Total Funding'] = company_data.get('total_funding')
+            
+            # Store additional info in Intelligence Notes
+            notes_parts = []
+            if company_data.get('employee_count'):
+                notes_parts.append(f"Size: {company_data.get('employee_count')}")
+            if company_data.get('focus_areas'):
+                notes_parts.append(f"Focus: {company_data.get('focus_areas')}")
+            if company_data.get('technology'):
+                notes_parts.append(f"Technology: {company_data.get('technology')}")
+            if notes_parts:
+                fields['Intelligence Notes'] = '\n'.join(notes_parts)
+            
+            # Skip multi-select fields (Focus Area, Technology Platform, Pipeline Stage, Therapeutic Areas)
+            # and single-select fields (Funding Stage, Company Size, Manufacturing Status, Enrichment Status)
+            # to avoid permission errors - these can be set via Airtable automation
             
             # Clean empty values
-            fields = {k: v for k, v in fields.items() if v}
+            fields = {k: v for k, v in fields.items() if v is not None and v != ''}
             record = self.companies_table.create(fields)
             return record.get('id')
             
@@ -382,54 +407,47 @@ Return ONLY valid JSON:
         try:
             update = {}
             
-            # NOTE: Linked Lead and Linked Company fields skipped - 
-            # they need to be configured in Airtable to point to correct tables
-            # Uncomment once Airtable link fields are properly configured:
-            # if lead_record_id:
-            #     update['Linked Lead'] = [lead_record_id]
-            # if company_record_id:
-            #     update['Linked Company'] = [company_record_id]
+            # Link to main tables - ICP scores will auto-populate via lookups
+            if lead_record_id:
+                update['Linked Lead'] = [lead_record_id]
+            if company_record_id:
+                update['Linked Company'] = [company_record_id]
             
-            # Lead data - only text/number fields
+            # Basic fields from enrichment
             if lead_data:
                 email = lead_data.get('Email') or lead_data.get('email')
-                if email and '@' in str(email):
+                if email and '@' in str(email) and 'NOT_FOUND' not in str(email).upper():
                     update['Email'] = email
                     
                 linkedin = lead_data.get('LinkedIn URL') or lead_data.get('linkedin_url')
                 if linkedin and 'linkedin.com' in str(linkedin):
                     update['LinkedIn URL'] = linkedin
-                
-                # ICP score (number field)
-                lead_icp = lead_data.get('Lead ICP Score') or lead_data.get('lead_icp_score')
-                if lead_icp:
-                    update['Lead ICP Score'] = lead_icp
             
-            # Company ICP score (number field)
-            if company_data:
-                company_icp = company_data.get('ICP Fit Score') or company_data.get('icp_score')
-                if company_icp:
-                    update['Company ICP Score'] = company_icp
+            # NOTE: ICP Score fields are lookups from linked records - don't update directly
             
-            # Only update if we have something to update
             if update:
                 self.campaign_leads_table.update(record_id, update)
             return True
             
         except Exception as e:
             logger.error(f"  Error updating campaign lead: {e}")
-            # Try update without link fields (in case they don't exist)
+            # Try update without link fields
             try:
                 minimal_update = {}
                 if lead_data:
                     email = lead_data.get('Email') or lead_data.get('email')
-                    if email and '@' in str(email):
+                    if email and '@' in str(email) and 'NOT_FOUND' not in str(email).upper():
                         minimal_update['Email'] = email
+                if lead_record_id:
+                    minimal_update['Linked Lead'] = [lead_record_id]
+                if company_record_id:
+                    minimal_update['Linked Company'] = [company_record_id]
                 if minimal_update:
                     self.campaign_leads_table.update(record_id, minimal_update)
                 logger.info(f"  ⚠ Updated with minimal fields only")
                 return True
-            except:
+            except Exception as e2:
+                logger.error(f"  Minimal update also failed: {e2}")
                 return False
     
     def process_enrichment(self, limit: Optional[int] = None):
