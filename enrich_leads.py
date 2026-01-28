@@ -413,12 +413,38 @@ Only return the JSON, no other text."""
             
             # Parse JSON from response
             result_text = result_text.strip()
+            
+            # Check if we got any response
+            if not result_text:
+                logger.warning(f"Empty response for {lead_name}")
+                return {
+                    "overall_confidence": "Failed",
+                    "error": "Empty response from AI"
+                }
+            
+            # Handle markdown code blocks
             if result_text.startswith("```json"):
                 result_text = result_text[7:]
             if result_text.startswith("```"):
                 result_text = result_text[3:]
             if result_text.endswith("```"):
                 result_text = result_text[:-3]
+            
+            result_text = result_text.strip()
+            
+            # Find JSON object in response
+            if not result_text.startswith("{"):
+                # Try to find JSON in the response
+                start = result_text.find("{")
+                if start != -1:
+                    end = result_text.rfind("}") + 1
+                    result_text = result_text[start:end]
+                else:
+                    logger.warning(f"No JSON found in response for {lead_name}")
+                    return {
+                        "overall_confidence": "Failed",
+                        "error": "No JSON in response"
+                    }
             
             result = json.loads(result_text.strip())
             logger.info(f"Successfully enriched {lead_name}")
@@ -535,6 +561,11 @@ Only return valid JSON."""
                 if block.type == "text":
                     result_text += block.text
             
+            # Check for empty response
+            if not result_text.strip():
+                logger.warning("Empty response for outreach generation")
+                return None
+            
             # Clean JSON
             result_text = result_text.strip()
             if result_text.startswith("```json"):
@@ -544,6 +575,16 @@ Only return valid JSON."""
             if result_text.endswith("```"):
                 result_text = result_text[:-3]
             result_text = result_text.strip()
+            
+            # Find JSON if not at start
+            if not result_text.startswith("{"):
+                start = result_text.find("{")
+                if start != -1:
+                    end = result_text.rfind("}") + 1
+                    result_text = result_text[start:end]
+                else:
+                    logger.warning("No JSON found in outreach response")
+                    return None
             
             # Parse
             messages_data = json.loads(result_text)
