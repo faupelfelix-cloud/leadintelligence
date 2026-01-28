@@ -259,8 +259,8 @@ class CampaignLeadsProcessor:
     # ==================== OUTREACH GENERATION ====================
     
     def generate_outreach_messages(self, lead_fields: Dict, company_fields: Dict, 
-                                   campaign_type: str = "general") -> Dict[str, str]:
-        """Generate personalized outreach messages"""
+                                   campaign_context: Dict = None) -> Dict[str, str]:
+        """Generate personalized outreach messages with campaign context"""
         
         name = lead_fields.get('Lead Name', 'there')
         first_name = name.split()[0] if name != 'there' else 'there'
@@ -272,7 +272,47 @@ class CampaignLeadsProcessor:
         if isinstance(focus_areas, list):
             focus_areas = ', '.join(focus_areas)
         
-        prompt = f"""Generate personalized outreach messages for a biologics CDMO (Contract Development and Manufacturing Organization) targeting biotech companies.
+        # Campaign context
+        campaign_context = campaign_context or {}
+        campaign_type = campaign_context.get('Campaign Type', 'general')
+        conference_name = campaign_context.get('Conference Name', '')
+        campaign_background = campaign_context.get('Campaign Background', '')
+        campaign_date = campaign_context.get('Campaign Date', '')
+        
+        # Build campaign-specific instructions
+        campaign_instructions = ""
+        if campaign_type == 'Conference' and conference_name:
+            campaign_instructions = f"""
+CAMPAIGN CONTEXT:
+This is a CONFERENCE outreach campaign for {conference_name}.
+Conference Date: {campaign_date}
+Campaign Background: {campaign_background}
+
+IMPORTANT: The messages MUST reference the conference as the reason for reaching out.
+- Mention you'll be attending/looking forward to {conference_name}
+- Suggest meeting at the conference
+- Reference the conference as a natural networking opportunity
+"""
+        elif campaign_background:
+            campaign_instructions = f"""
+CAMPAIGN CONTEXT:
+Campaign Type: {campaign_type}
+Campaign Background: {campaign_background}
+
+IMPORTANT: Use the campaign background as context for the outreach. 
+- Reference the campaign reason naturally in your messages
+- Tie Rezon Bio's offerings to the specific context/opportunity mentioned
+- Make the outreach feel timely and relevant based on this context
+"""
+        elif campaign_type and campaign_type != 'general':
+            campaign_instructions = f"""
+CAMPAIGN CONTEXT:
+Campaign Type: {campaign_type}
+
+Tailor the messaging style appropriately for this type of campaign.
+"""
+        
+        prompt = f"""Generate personalized outreach messages for a biologics CDMO targeting biotech companies.
 
 LEAD INFORMATION:
 - Name: {name}
@@ -281,7 +321,7 @@ LEAD INFORMATION:
 - Location: {location}
 - Focus Areas: {focus_areas}
 - Pipeline: {pipeline}
-
+{campaign_instructions}
 REZON BIO CONTEXT:
 Rezon Bio is a European biologics CDMO specializing in:
 - Mammalian cell culture (CHO)
@@ -290,38 +330,65 @@ Rezon Bio is a European biologics CDMO specializing in:
 - European quality standards with competitive pricing
 
 OUTREACH REQUIREMENTS:
-Generate 4 different message types. Each should be personalized, professional, and focused on value.
+Generate 4 personalized, professional messages. Keep them concise.
 
-Return ONLY valid JSON:
+Return ONLY valid JSON (no markdown, no extra text):
 {{
-    "email_subject": "Short, compelling subject line (under 60 chars)",
-    "email_body": "Professional email body (150-250 words). Reference their pipeline/focus if known. Clear CTA for a call.",
-    "linkedin_connection": "Brief connection request (under 300 chars). Mention something specific about them or their company.",
-    "linkedin_inmail_subject": "InMail subject line",
-    "linkedin_inmail_body": "Slightly shorter than email (100-150 words). More conversational tone.",
-    "linkedin_short": "Very brief follow-up message (under 200 chars)"
+    "email_subject": "Subject line under 60 chars",
+    "email_body": "Email body 100-150 words max. Clear CTA.",
+    "linkedin_connection": "Connection request under 280 chars",
+    "linkedin_inmail_subject": "InMail subject",
+    "linkedin_inmail_body": "InMail body 80-120 words",
+    "linkedin_short": "Follow-up under 180 chars"
 }}"""
 
         try:
             message = self.anthropic_client.messages.create(
                 model=self.config['anthropic']['model'],
-                max_tokens=2000,
+                max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
             
             response_text = message.content[0].text if message.content else ""
             
-            # Parse JSON
+            # Parse JSON with better error handling
+            json_str = ""
             if "```json" in response_text:
                 json_str = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                json_str = response_text.split("```")[1].split("```")[0].strip()
             elif "{" in response_text:
                 start = response_text.find("{")
                 end = response_text.rfind("}") + 1
                 json_str = response_text[start:end]
-            else:
+            
+            if not json_str:
+                logger.error("No JSON found in response")
                 return {}
             
-            return json.loads(json_str)
+            # Try to fix common JSON issues
+            json_str = json_str.replace('\n', ' ').replace('\r', '')
+            
+            # Handle unterminated strings by trying to close them
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                # Try to salvage partial JSON
+                logger.warning(f"JSON parse error, attempting fix: {str(e)[:50]}")
+                
+                # Count braces to check if truncated
+                open_braces = json_str.count('{')
+                close_braces = json_str.count('}')
+                
+                if open_braces > close_braces:
+                    # Truncated - try to close it
+                    json_str = json_str.rstrip(',') + '}'
+                    try:
+                        return json.loads(json_str)
+                    except:
+                        pass
+                
+                return {}
             
         except Exception as e:
             logger.error(f"Error generating outreach: {e}")
@@ -499,8 +566,16 @@ Return ONLY valid JSON:
                 if company_record_ids:
                     company_data = self.companies_table.get(company_record_ids[0])['fields']
                 
-                # Generate messages
-                messages = self.generate_outreach_messages(lead_data, company_data, campaign_type)
+                # Extract campaign context from the Campaign Lead record
+                campaign_context = {
+                    'Campaign Type': fields.get('Campaign Type', campaign_type),
+                    'Conference Name': fields.get('Conference Name', ''),
+                    'Campaign Background': fields.get('Campaign Background', ''),
+                    'Campaign Date': fields.get('Campaign Date', ''),
+                }
+                
+                # Generate messages with campaign context
+                messages = self.generate_outreach_messages(lead_data, company_data, campaign_context)
                 
                 if messages:
                     if self.update_campaign_lead_outreach(record_id, messages):
