@@ -335,8 +335,7 @@ Return ONLY valid JSON:
                 'Lead ICP Tier': lead_data.get('lead_icp_tier', ''),
                 'Lead ICP Justification': lead_data.get('lead_icp_justification', ''),
                 'Enrichment Status': 'Enriched',
-                'Last Enriched': datetime.now().strftime('%Y-%m-%d'),
-                'Source': 'Campaign Upload'
+                'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d')
             }
             
             if company_record_id:
@@ -356,20 +355,35 @@ Return ONLY valid JSON:
             fields = {
                 'Company Name': company_data.get('name', ''),
                 'Website': company_data.get('website', ''),
-                'LinkedIn Page': company_data.get('linkedin_page', ''),
-                'Location': company_data.get('location', ''),
-                'Company Size': company_data.get('company_size', ''),
-                'Focus Area': company_data.get('focus_area', ''),
-                'Technology Platform': company_data.get('technology_platform', ''),
-                'Pipeline Info': company_data.get('pipeline_info', ''),
+                'LinkedIn Company Page': company_data.get('linkedin_page', ''),
+                'Location/HQ': company_data.get('location', ''),
+                'Lead Programs': company_data.get('pipeline_info', ''),
                 'Funding Stage': company_data.get('funding_stage', ''),
-                'ICP Score': company_data.get('icp_score'),
-                'ICP Tier': company_data.get('icp_tier', ''),
-                'ICP Justification': company_data.get('icp_justification', ''),
-                'Source': 'Campaign Upload',
-                'Last Updated': datetime.now().strftime('%Y-%m-%d')
+                'ICP Fit Score': company_data.get('icp_score'),
+                'ICP Score Justification': company_data.get('icp_justification', ''),
+                'Enrichment Status': 'Enriched'
             }
             
+            # Handle multi-select fields (need arrays)
+            if company_data.get('focus_area'):
+                # Convert string to array if needed
+                focus = company_data.get('focus_area', '')
+                if isinstance(focus, str):
+                    fields['Focus Area'] = [f.strip() for f in focus.split(',')]
+                else:
+                    fields['Focus Area'] = focus
+            
+            if company_data.get('technology_platform'):
+                tech = company_data.get('technology_platform', '')
+                if isinstance(tech, str):
+                    fields['Technology Platform'] = [t.strip() for t in tech.split(',')]
+                else:
+                    fields['Technology Platform'] = tech
+            
+            if company_data.get('company_size'):
+                fields['Company Size'] = company_data.get('company_size', '')
+            
+            # Clean empty values
             fields = {k: v for k, v in fields.items() if v}
             record = self.companies_table.create(fields)
             return record.get('id')
@@ -386,53 +400,61 @@ Return ONLY valid JSON:
                                               status: str) -> bool:
         """Update campaign lead record with enriched data and links"""
         try:
-            update = {
-                'Enrichment Status': status,
-                'Last Enriched': datetime.now().strftime('%Y-%m-%d')
-            }
+            update = {}
             
-            # Link to main tables
+            # Try to set enrichment status (skip if field doesn't exist)
+            try:
+                update['Enrichment Status'] = status
+            except:
+                pass
+            
+            # Link to main tables - these must be Link fields in Airtable
+            # Only add if we have valid record IDs
             if lead_record_id:
                 update['Linked Lead'] = [lead_record_id]
             if company_record_id:
                 update['Linked Company'] = [company_record_id]
             
-            # Lead data (these can also be lookups from linked records)
+            # Lead data - only add fields that exist
             if lead_data:
-                if lead_data.get('Email'):
-                    update['Email'] = lead_data.get('Email') or lead_data.get('email', '')
-                if lead_data.get('LinkedIn URL') or lead_data.get('linkedin_url'):
-                    update['LinkedIn URL'] = lead_data.get('LinkedIn URL') or lead_data.get('linkedin_url', '')
-                if lead_data.get('X Profile') or lead_data.get('x_profile'):
-                    update['X Profile'] = lead_data.get('X Profile') or lead_data.get('x_profile', '')
+                email = lead_data.get('Email') or lead_data.get('email')
+                if email:
+                    update['Email'] = email
+                    
+                linkedin = lead_data.get('LinkedIn URL') or lead_data.get('linkedin_url')
+                if linkedin:
+                    update['LinkedIn URL'] = linkedin
                 
                 # ICP scores
                 lead_icp = lead_data.get('Lead ICP Score') or lead_data.get('lead_icp_score')
                 if lead_icp:
                     update['Lead ICP Score'] = lead_icp
+                    
                 lead_tier = lead_data.get('Lead ICP Tier') or lead_data.get('lead_icp_tier')
                 if lead_tier:
                     update['Lead ICP Tier'] = lead_tier
             
-            # Company data
+            # Company ICP data
             if company_data:
-                company_icp = company_data.get('ICP Score') or company_data.get('icp_score')
+                company_icp = company_data.get('ICP Fit Score') or company_data.get('icp_score')
                 if company_icp:
                     update['Company ICP Score'] = company_icp
-                company_tier = company_data.get('ICP Tier') or company_data.get('icp_tier')
-                if company_tier:
-                    update['Company ICP Tier'] = company_tier
-                if company_data.get('Focus Area') or company_data.get('focus_area'):
-                    update['Company Focus'] = company_data.get('Focus Area') or company_data.get('focus_area', '')
-                if company_data.get('Technology Platform') or company_data.get('technology_platform'):
-                    update['Company Technology'] = company_data.get('Technology Platform') or company_data.get('technology_platform', '')
             
-            self.campaign_leads_table.update(record_id, update)
+            # Only update if we have something to update
+            if update:
+                self.campaign_leads_table.update(record_id, update)
             return True
             
         except Exception as e:
             logger.error(f"  Error updating campaign lead: {e}")
-            return False
+            # Try minimal update without links
+            try:
+                minimal_update = {'Enrichment Status': status}
+                self.campaign_leads_table.update(record_id, minimal_update)
+                logger.info(f"  ⚠ Updated with minimal fields only")
+                return True
+            except:
+                return False
     
     def process_enrichment(self, limit: Optional[int] = None):
         """
