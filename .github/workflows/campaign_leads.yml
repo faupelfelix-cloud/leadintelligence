@@ -1,0 +1,79 @@
+name: Campaign Leads - Process
+
+on:
+  workflow_dispatch:
+    inputs:
+      campaign_type:
+        description: 'Filter by campaign type (optional)'
+        required: false
+        type: choice
+        options:
+          - ''
+          - Conference
+          - Webinar
+          - Trade Show
+          - Partnership Event
+          - Workshop
+          - Post-Event Follow-up
+          - Custom
+      limit:
+        description: 'Max leads to process (leave empty for all)'
+        required: false
+        type: number
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install pyairtable anthropic pyyaml
+      
+      - name: Process campaign leads
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type }}"
+          LIMIT="${{ github.event.inputs.limit }}"
+          
+          echo "=============================================="
+          echo "Campaign Leads - Full Processing"
+          echo "=============================================="
+          echo "This will automatically:"
+          echo "  1. Look up leads/companies in main tables"
+          echo "  2. Create & enrich if not found"
+          echo "  3. Generate personalized outreach messages"
+          echo "=============================================="
+          
+          CMD="python process_campaign_leads.py"
+          
+          if [ -n "$CAMPAIGN_TYPE" ]; then
+            echo "Filtering by campaign type: $CAMPAIGN_TYPE"
+            CMD="$CMD --campaign-type \"$CAMPAIGN_TYPE\""
+          fi
+          
+          if [ -n "$LIMIT" ]; then
+            echo "Processing up to $LIMIT leads..."
+            CMD="$CMD --limit $LIMIT"
+          fi
+          
+          eval $CMD
+      
+      - name: Upload log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: campaign-leads-log-${{ github.run_id }}
+          path: campaign_leads.log
+          retention-days: 30
