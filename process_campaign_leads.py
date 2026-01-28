@@ -382,20 +382,22 @@ Return ONLY valid JSON:
         try:
             update = {}
             
-            # Link to main tables - these must be Link fields in Airtable
-            if lead_record_id:
-                update['Linked Lead'] = [lead_record_id]
-            if company_record_id:
-                update['Linked Company'] = [company_record_id]
+            # NOTE: Linked Lead and Linked Company fields skipped - 
+            # they need to be configured in Airtable to point to correct tables
+            # Uncomment once Airtable link fields are properly configured:
+            # if lead_record_id:
+            #     update['Linked Lead'] = [lead_record_id]
+            # if company_record_id:
+            #     update['Linked Company'] = [company_record_id]
             
             # Lead data - only text/number fields
             if lead_data:
                 email = lead_data.get('Email') or lead_data.get('email')
-                if email:
+                if email and '@' in str(email):
                     update['Email'] = email
                     
                 linkedin = lead_data.get('LinkedIn URL') or lead_data.get('linkedin_url')
-                if linkedin:
+                if linkedin and 'linkedin.com' in str(linkedin):
                     update['LinkedIn URL'] = linkedin
                 
                 # ICP score (number field)
@@ -421,7 +423,7 @@ Return ONLY valid JSON:
                 minimal_update = {}
                 if lead_data:
                     email = lead_data.get('Email') or lead_data.get('email')
-                    if email:
+                    if email and '@' in str(email):
                         minimal_update['Email'] = email
                 if minimal_update:
                     self.campaign_leads_table.update(record_id, minimal_update)
