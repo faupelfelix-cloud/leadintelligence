@@ -1,0 +1,128 @@
+name: Daily Market News Intelligence
+
+on:
+  schedule:
+    # Runs every day at 6:00 AM UTC (7:00 AM CET, 8:00 AM CEST)
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allows manual trigger for testing
+    inputs:
+      relevance_threshold:
+        description: 'Minimum relevance score (0-10)'
+        required: false
+        default: '5'
+      collect_only:
+        description: 'Only collect, skip analysis'
+        required: false
+        default: 'false'
+
+jobs:
+  news-collection:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install anthropic pyairtable pyyaml feedparser requests python-dateutil
+    
+    - name: Create config file
+      run: |
+        cat > config.yaml << EOF
+        airtable:
+          api_key: "${{ secrets.AIRTABLE_API_KEY }}"
+          base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
+          tables:
+            companies: "Companies"
+            leads: "Leads"
+        
+        anthropic:
+          api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
+          model: "claude-sonnet-4-20250514"
+        
+        news_api:
+          api_key: "${{ secrets.NEWS_API_KEY }}"
+        EOF
+    
+    - name: Run market news collection
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
+      run: |
+        if [ "${{ github.event.inputs.collect_only }}" == "true" ]; then
+          python market_news_intelligence.py --collect-only
+        else
+          python market_news_intelligence.py --threshold ${{ github.event.inputs.relevance_threshold || '5' }}
+        fi
+    
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: market-news-logs-${{ github.run_id }}
+        path: |
+          *.log
+        retention-days: 7
+
+  # Optional: Run follow-up enrichment for new companies/leads
+  enrichment:
+    needs: news-collection
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install anthropic pyairtable pyyaml requests
+    
+    - name: Create config file
+      run: |
+        cat > config.yaml << EOF
+        airtable:
+          api_key: "${{ secrets.AIRTABLE_API_KEY }}"
+          base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
+          tables:
+            companies: "Companies"
+            leads: "Leads"
+        
+        anthropic:
+          api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
+          model: "claude-sonnet-4-20250514"
+        
+        web_search:
+          rate_limit_delay: 2
+        EOF
+    
+    - name: Enrich new companies (limit 5)
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+      run: |
+        python enrich_companies.py --limit 5 || true
+    
+    - name: Generate trigger outreach
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+      run: |
+        python generate_trigger_outreach.py --limit 10 || true
