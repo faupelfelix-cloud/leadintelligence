@@ -59,6 +59,14 @@ class CampaignLeadsProcessor:
         self.companies_table = self.base.table(self.config['airtable']['tables']['companies'])
         self.leads_table = self.base.table(self.config['airtable']['tables']['leads'])
         
+        # Trigger History table for tracking outreach triggers
+        try:
+            self.trigger_history_table = self.base.table('Trigger History')
+            logger.info("Trigger History table connected")
+        except Exception as e:
+            self.trigger_history_table = None
+            logger.warning(f"Trigger History table not found: {e}")
+        
         # Initialize enrichers (they handle their own Airtable connections)
         self.company_enricher = CompanyEnricher(config_path)
         self.lead_enricher = LeadEnricher(config_path)
@@ -255,6 +263,86 @@ class CampaignLeadsProcessor:
         except Exception as e:
             logger.error(f"Error updating campaign lead: {e}")
             return False
+    
+    def create_trigger_event(self, lead_record_id: str, company_record_id: Optional[str],
+                             campaign_fields: Dict, lead_name: str, company_name: str) -> Optional[str]:
+        """Create a trigger event in Trigger History table for campaign lead"""
+        
+        if not self.trigger_history_table:
+            logger.warning("  Trigger History table not available - skipping trigger creation")
+            return None
+        
+        try:
+            # Determine trigger type based on campaign type
+            campaign_type = campaign_fields.get('Campaign Type', 'Campaign')
+            conference_name = campaign_fields.get('Conference Name', '')
+            campaign_background = campaign_fields.get('Campaign Background', '')
+            campaign_date = campaign_fields.get('Campaign Date', '')
+            
+            # Map campaign type to trigger type
+            if campaign_type == 'Conference' or conference_name:
+                trigger_type = 'CONFERENCE'
+            elif campaign_type == 'Event':
+                trigger_type = 'EVENT'
+            elif campaign_type == 'Funding':
+                trigger_type = 'FUNDING'
+            elif campaign_type == 'Pipeline':
+                trigger_type = 'PIPELINE'
+            else:
+                trigger_type = 'CAMPAIGN'
+            
+            # Build description
+            description_parts = []
+            if campaign_type:
+                description_parts.append(f"Campaign: {campaign_type}")
+            if conference_name:
+                description_parts.append(f"Conference: {conference_name}")
+            if campaign_background:
+                description_parts.append(campaign_background[:200])
+            
+            description = " | ".join(description_parts) if description_parts else f"Campaign outreach to {lead_name}"
+            
+            # Build outreach angle
+            if conference_name:
+                outreach_angle = f"Meeting at {conference_name} - discuss manufacturing needs"
+            elif campaign_background:
+                outreach_angle = campaign_background[:200]
+            else:
+                outreach_angle = "Campaign outreach - explore manufacturing partnership"
+            
+            # Create trigger record
+            trigger_fields = {
+                'Date Detected': datetime.now().strftime('%Y-%m-%d'),
+                'Lead': [lead_record_id],
+                'Trigger Type': trigger_type,
+                'Urgency': 'MEDIUM',
+                'Description': description,
+                'Outreach Angle': outreach_angle,
+                'Status': 'New',
+                'Sources': 'Campaign Leads'
+            }
+            
+            # Add company link if available
+            if company_record_id:
+                trigger_fields['Company'] = [company_record_id]
+            
+            # Add conference name if available
+            if conference_name:
+                trigger_fields['Conference Name'] = conference_name
+            
+            # Add event date if available
+            if campaign_date:
+                trigger_fields['Event Date'] = campaign_date
+            
+            record = self.trigger_history_table.create(trigger_fields)
+            trigger_id = record.get('id')
+            
+            logger.info(f"  ✓ Trigger event created ({trigger_type})")
+            return trigger_id
+            
+        except Exception as e:
+            logger.error(f"  Error creating trigger event: {e}")
+            return None
     
     # ==================== OUTREACH GENERATION ====================
     
@@ -545,6 +633,16 @@ Return ONLY valid JSON:
                 if self.update_campaign_lead_links(record_id, lead_record_id, company_record_id, lead_data):
                     logger.info(f"  ✓ Campaign lead linked")
                     success += 1
+                    
+                    # ========== STEP 4: CREATE TRIGGER EVENT ==========
+                    if lead_record_id:
+                        self.create_trigger_event(
+                            lead_record_id=lead_record_id,
+                            company_record_id=company_record_id,
+                            campaign_fields=fields,
+                            lead_name=name,
+                            company_name=company
+                        )
                     
                     # Auto-check Generate Messages
                     try:
