@@ -1,0 +1,84 @@
+name: Competitor Enrichment
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode'
+        required: true
+        default: 'unenriched'
+        type: choice
+        options:
+          - unenriched
+          - all
+          - specific
+      company_name:
+        description: 'Company name (only for specific mode)'
+        required: false
+      limit:
+        description: 'Limit number of companies'
+        required: false
+        default: '10'
+
+jobs:
+  enrich-competitors:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install anthropic pyairtable pyyaml
+    
+    - name: Create config file
+      run: |
+        cat > config.yaml << EOF
+        airtable:
+          api_key: "${{ secrets.AIRTABLE_API_KEY }}"
+          base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
+          tables:
+            companies: "Companies"
+            leads: "Leads"
+        
+        anthropic:
+          api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
+          model: "claude-sonnet-4-20250514"
+        EOF
+    
+    - name: Run competitor enrichment
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+      run: |
+        MODE="${{ github.event.inputs.mode }}"
+        LIMIT="${{ github.event.inputs.limit || '10' }}"
+        COMPANY="${{ github.event.inputs.company_name }}"
+        
+        if [ "$MODE" == "all" ]; then
+          echo "Enriching all competitors..."
+          python enrich_competitors.py --all --limit $LIMIT
+        elif [ "$MODE" == "specific" ] && [ -n "$COMPANY" ]; then
+          echo "Enriching specific company: $COMPANY"
+          python enrich_competitors.py --company "$COMPANY"
+        else
+          echo "Enriching unenriched competitors..."
+          python enrich_competitors.py --limit $LIMIT
+        fi
+    
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: competitor-enrichment-logs-${{ github.run_id }}
+        path: |
+          *.log
+        retention-days: 7
