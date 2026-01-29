@@ -14,12 +14,19 @@ airtable:
     enrichment_queue: "Enrichment Queue"
     trigger_history: "Trigger History"
     conferences: "Conferences We Attend"  # Your conference tracking table
+    campaign_leads: "Campaign Leads"  # Campaign leads table
 
 # Anthropic API Configuration
 anthropic:
   api_key: "YOUR_ANTHROPIC_API_KEY_HERE"  # Get from: https://console.anthropic.com/
   model: "claude-sonnet-4-20250514"
   max_tokens: 4096
+
+# NewsAPI Configuration (Optional - for market news)
+news_api:
+  api_key: "YOUR_NEWSAPI_KEY_HERE"  # Get from: https://newsapi.org/register
+  # Free tier: 100 requests/day
+  # Paid tier: $49/month for more coverage
 
 # ============================================================
 # FEATURE TOGGLES - Enable/disable expensive features
