@@ -409,109 +409,214 @@ Return ONLY the JSON object."""
             return {'error': str(e)}
     
     def update_competitor_record(self, record_id: str, enrichment_data: Dict) -> bool:
-        """Update competitor record in Airtable"""
+        """Update competitor record in Airtable with smart field handling"""
         
         if enrichment_data.get('error'):
             logger.error(f"Skipping update due to enrichment error")
             return False
         
-        # Map enrichment data to Airtable fields
-        update_data = {}
+        # ═══════════════════════════════════════════════════════════════
+        # FIELD MAPPINGS - Map AI responses to exact Airtable options
+        # ═══════════════════════════════════════════════════════════════
         
-        # Basic info
+        ownership_mapping = {
+            'public': 'Public',
+            'private': 'Private',
+            'pe-backed': 'PE-Backed',
+            'pe backed': 'PE-Backed',
+            'subsidiary': 'Subsidiary',
+            'private (subsidiary)': 'Subsidiary',
+        }
+        
+        threat_mapping = {
+            'high': 'High',
+            'medium': 'Medium',
+            'low': 'Low',
+        }
+        
+        pricing_mapping = {
+            'premium': 'Premium',
+            'mid-market': 'Mid-Market',
+            'mid market': 'Mid-Market',
+            'value': 'Value',
+        }
+        
+        ranking_mapping = {
+            'top tier': 'Top Tier',
+            'mid tier': 'Mid Tier',
+            'emerging': 'Emerging',
+            'niche': 'Niche',
+        }
+        
+        # Valid multi-select options (add "Other" as fallback)
+        valid_services = [
+            'Process Development', 'Cell Line Development', 'Analytical Development',
+            'Clinical Manufacturing', 'Commercial Manufacturing', 'Fill-Finish',
+            'Drug Product', 'Drug Substance', 'Formulation Development',
+            'Tech Transfer Support', 'Regulatory Support', 'Biosimilar Development', 'Other'
+        ]
+        
+        valid_technologies = [
+            'Monoclonal Antibodies', 'Bispecific Antibodies', 'ADCs', 'Fusion Proteins',
+            'Viral Vectors', 'Cell Therapy', 'Gene Therapy', 'mRNA', 'Vaccines',
+            'Biosimilars', 'Recombinant Proteins', 'Other'
+        ]
+        
+        valid_expression_systems = [
+            'CHO', 'HEK293', 'NS0', 'SP2/0', 'Microbial (E. coli)', 'Yeast', 'Insect Cells', 'Other'
+        ]
+        
+        valid_client_focus = [
+            'Big Pharma', 'Mid-size Biotech', 'Emerging Biotech', 'Virtual Biotech', 'Academic/Research'
+        ]
+        
+        valid_geographic = [
+            'North America', 'Europe', 'Asia Pacific', 'China', 'Japan', 'Global'
+        ]
+        
+        def map_single_select(value, mapping):
+            """Map a value to valid Airtable option"""
+            if not value:
+                return None
+            value_lower = value.lower().strip()
+            return mapping.get(value_lower)
+        
+        def filter_multi_select(values, valid_options):
+            """Filter list to only valid options, use 'Other' for unknowns"""
+            if not values:
+                return None
+            filtered = []
+            has_unknown = False
+            for v in values:
+                if v in valid_options:
+                    filtered.append(v)
+                else:
+                    has_unknown = True
+            if has_unknown and 'Other' in valid_options and 'Other' not in filtered:
+                filtered.append('Other')
+            return filtered if filtered else None
+        
+        # ═══════════════════════════════════════════════════════════════
+        # BUILD UPDATE DATA - Separate safe fields from risky ones
+        # ═══════════════════════════════════════════════════════════════
+        
+        # SAFE FIELDS - These almost never fail
+        safe_data = {
+            'Enrichment Status': 'Enriched',
+            'Last Enriched': datetime.now().strftime('%Y-%m-%d')
+        }
+        
+        # Basic info (URLs and text)
         if enrichment_data.get('website'):
-            update_data['Website'] = enrichment_data['website']
+            safe_data['Website'] = enrichment_data['website']
         if enrichment_data.get('linkedin'):
-            update_data['LinkedIn'] = enrichment_data['linkedin']
+            safe_data['LinkedIn'] = enrichment_data['linkedin']
         if enrichment_data.get('headquarters'):
-            update_data['Headquarters'] = enrichment_data['headquarters']
+            safe_data['Headquarters'] = enrichment_data['headquarters']
+        
+        # Number fields
         if enrichment_data.get('founded_year'):
-            update_data['Founded Year'] = enrichment_data['founded_year']
+            safe_data['Founded Year'] = enrichment_data['founded_year']
         if enrichment_data.get('employees'):
-            update_data['Employees'] = enrichment_data['employees']
+            safe_data['Employees'] = enrichment_data['employees']
         if enrichment_data.get('revenue_usd_millions'):
-            update_data['Revenue USD Millions'] = enrichment_data['revenue_usd_millions']
-        if enrichment_data.get('ownership'):
-            update_data['Ownership'] = enrichment_data['ownership']
-        
-        # Manufacturing capacity
+            safe_data['Revenue USD Millions'] = enrichment_data['revenue_usd_millions']
         if enrichment_data.get('number_of_sites'):
-            update_data['Number of Sites'] = enrichment_data['number_of_sites']
+            safe_data['Number of Sites'] = enrichment_data['number_of_sites']
         if enrichment_data.get('site_locations'):
-            update_data['Site Locations'] = enrichment_data['site_locations']
+            safe_data['Site Locations'] = enrichment_data['site_locations']
         if enrichment_data.get('number_of_bioreactors'):
-            update_data['Number of Bioreactors'] = enrichment_data['number_of_bioreactors']
+            safe_data['Number of Bioreactors'] = enrichment_data['number_of_bioreactors']
         if enrichment_data.get('largest_bioreactor_l'):
-            update_data['Largest Bioreactor L'] = enrichment_data['largest_bioreactor_l']
+            safe_data['Largest Bioreactor L'] = enrichment_data['largest_bioreactor_l']
         if enrichment_data.get('mammalian_scales'):
-            update_data['Mammalian Scales'] = enrichment_data['mammalian_scales']
+            safe_data['Mammalian Scales'] = enrichment_data['mammalian_scales']
         if enrichment_data.get('total_mammalian_capacity_l'):
-            update_data['Total Mammalian Capacity L'] = enrichment_data['total_mammalian_capacity_l']
+            safe_data['Total Mammalian Capacity L'] = enrichment_data['total_mammalian_capacity_l']
+        
+        # Checkboxes
         if enrichment_data.get('has_fill_finish') is not None:
-            update_data['Fill Finish Capability'] = enrichment_data['has_fill_finish']
+            safe_data['Fill Finish Capability'] = enrichment_data['has_fill_finish']
         if enrichment_data.get('has_drug_product') is not None:
-            update_data['Drug Product Capability'] = enrichment_data['has_drug_product']
+            safe_data['Drug Product Capability'] = enrichment_data['has_drug_product']
         
-        # Multi-select fields - only if list is provided
-        if enrichment_data.get('services_offered'):
-            update_data['Services Offered'] = enrichment_data['services_offered']
-        if enrichment_data.get('technologies'):
-            update_data['Technologies'] = enrichment_data['technologies']
-        if enrichment_data.get('expression_systems'):
-            update_data['Expression Systems'] = enrichment_data['expression_systems']
-        if enrichment_data.get('client_focus'):
-            update_data['Client Focus'] = enrichment_data['client_focus']
-        if enrichment_data.get('geographic_presence'):
-            update_data['Geographic Presence'] = enrichment_data['geographic_presence']
-        
-        # Strategic analysis
+        # Long text fields
         if enrichment_data.get('market_positioning'):
-            update_data['Market Positioning'] = enrichment_data['market_positioning']
+            safe_data['Market Positioning'] = enrichment_data['market_positioning']
         if enrichment_data.get('key_differentiators'):
-            update_data['Key Differentiators'] = enrichment_data['key_differentiators']
+            safe_data['Key Differentiators'] = enrichment_data['key_differentiators']
         if enrichment_data.get('strengths'):
-            update_data['Strengths'] = enrichment_data['strengths']
+            safe_data['Strengths'] = enrichment_data['strengths']
         if enrichment_data.get('weaknesses'):
-            update_data['Weaknesses'] = enrichment_data['weaknesses']
+            safe_data['Weaknesses'] = enrichment_data['weaknesses']
         if enrichment_data.get('recent_developments'):
-            update_data['Recent Developments'] = enrichment_data['recent_developments']
+            safe_data['Recent Developments'] = enrichment_data['recent_developments']
         
-        # Classification
-        if enrichment_data.get('ranking'):
-            update_data['Ranking'] = enrichment_data['ranking']
-        if enrichment_data.get('threat_level'):
-            update_data['Threat Level'] = enrichment_data['threat_level']
-        if enrichment_data.get('pricing_tier'):
-            update_data['Pricing Tier'] = enrichment_data['pricing_tier']
+        # SINGLE SELECT FIELDS - Map to exact values
+        ownership = map_single_select(enrichment_data.get('ownership'), ownership_mapping)
+        if ownership:
+            safe_data['Ownership'] = ownership
         
-        # Metadata
-        update_data['Enrichment Status'] = 'Enriched'
-        update_data['Last Enriched'] = datetime.now().strftime('%Y-%m-%d')
+        threat_level = map_single_select(enrichment_data.get('threat_level'), threat_mapping)
+        if threat_level:
+            safe_data['Threat Level'] = threat_level
+        
+        pricing_tier = map_single_select(enrichment_data.get('pricing_tier'), pricing_mapping)
+        if pricing_tier:
+            safe_data['Pricing Tier'] = pricing_tier
+        
+        ranking = map_single_select(enrichment_data.get('ranking'), ranking_mapping)
+        if ranking:
+            safe_data['Ranking'] = ranking
+        
+        # RISKY FIELDS - Multi-selects that might fail
+        risky_data = {}
+        
+        services = filter_multi_select(enrichment_data.get('services_offered'), valid_services)
+        if services:
+            risky_data['Services Offered'] = services
+        
+        technologies = filter_multi_select(enrichment_data.get('technologies'), valid_technologies)
+        if technologies:
+            risky_data['Technologies'] = technologies
+        
+        expression_systems = filter_multi_select(enrichment_data.get('expression_systems'), valid_expression_systems)
+        if expression_systems:
+            risky_data['Expression Systems'] = expression_systems
+        
+        client_focus = filter_multi_select(enrichment_data.get('client_focus'), valid_client_focus)
+        if client_focus:
+            risky_data['Client Focus'] = client_focus
+        
+        geographic = filter_multi_select(enrichment_data.get('geographic_presence'), valid_geographic)
+        if geographic:
+            risky_data['Geographic Presence'] = geographic
+        
+        # ═══════════════════════════════════════════════════════════════
+        # UPDATE STRATEGY: Safe fields first, then try risky ones
+        # ═══════════════════════════════════════════════════════════════
         
         try:
-            self.competitors_table.update(record_id, update_data)
+            # First, always update safe fields
+            self.competitors_table.update(record_id, safe_data)
+            logger.debug(f"  Safe fields updated successfully")
+            
+            # Then try risky fields one by one
+            for field_name, field_value in risky_data.items():
+                try:
+                    self.competitors_table.update(record_id, {field_name: field_value})
+                    logger.debug(f"  {field_name} updated")
+                except Exception as e:
+                    if 'INVALID_MULTIPLE_CHOICE_OPTIONS' in str(e):
+                        logger.warning(f"  Skipped {field_name} - some options not in Airtable")
+                    else:
+                        logger.warning(f"  Failed to update {field_name}: {e}")
+            
             return True
+            
         except Exception as e:
-            # Try with minimal fields if some fail
-            logger.warning(f"Full update failed, trying minimal: {e}")
-            try:
-                minimal_data = {
-                    'Enrichment Status': 'Enriched',
-                    'Last Enriched': datetime.now().strftime('%Y-%m-%d')
-                }
-                # Add text fields that are less likely to fail
-                for field in ['Market Positioning', 'Strengths', 'Weaknesses', 
-                             'Key Differentiators', 'Recent Developments', 'Primary Services']:
-                    key = field.lower().replace(' ', '_')
-                    if enrichment_data.get(key):
-                        minimal_data[field] = enrichment_data[key]
-                
-                self.competitors_table.update(record_id, minimal_data)
-                logger.warning("Updated with minimal fields - some multi-select fields may need manual setup")
-                return True
-            except Exception as e2:
-                logger.error(f"Update failed completely: {e2}")
-                return False
+            logger.error(f"  Failed to update safe fields: {e}")
+            return False
     
     def enrich_all(self, all_records: bool = False, company_name: str = None, 
                    limit: int = None) -> Dict:
