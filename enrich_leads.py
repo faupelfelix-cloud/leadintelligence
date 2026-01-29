@@ -156,112 +156,436 @@ class LeadEnricher:
         combined_priority = None
         if company_icp is not None:
             combined_priority = self.calculate_combined_priority(company_icp, score)
-            justification_text += f"\n\nCOMPANY ICP: {company_icp}/105\n→ COMBINED: {combined_priority}"
+            justification_text += f"\n\nCOMPANY ICP: {company_icp}/90\n→ COMBINED: {combined_priority}"
         
         return (score, tier, justification_text, combined_priority)
     
-    def score_title_relevance(self, title: str) -> int:
-        """Score title relevance (0-25 points)"""
+    def normalize_title(self, title: str) -> str:
+        """
+        Normalize title for fuzzy matching.
+        Handles variations like:
+        - "Chief Strategy Officer" → includes "cso"
+        - "Vice President" → includes "vp"
+        - "Senior Vice President" → includes "svp"
+        - "& " or " and " variations
+        - Common abbreviations and expansions
+        """
         if not title:
-            return 0
+            return ""
         
-        decision_makers = ['ceo', 'coo', 'president', 'cso', 'cto', 'founder']
-        if any(dm in title for dm in decision_makers):
+        title_lower = title.lower().strip()
+        
+        # Store original for combined matching
+        normalized = title_lower
+        
+        # ═══════════════════════════════════════════════════════════════
+        # EXPAND ABBREVIATIONS (so we can match both ways)
+        # ═══════════════════════════════════════════════════════════════
+        expansions = {
+            # C-Suite abbreviations
+            'ceo': 'ceo chief executive officer',
+            'coo': 'coo chief operating officer',
+            'cfo': 'cfo chief financial officer',
+            'cso': 'cso chief strategy officer chief scientific officer',
+            'cto': 'cto chief technology officer chief technical officer',
+            'cmo': 'cmo chief marketing officer chief medical officer',
+            'cbo': 'cbo chief business officer',
+            'cpo': 'cpo chief product officer chief procurement officer',
+            'cro': 'cro chief revenue officer chief research officer',
+            
+            # VP variations
+            'svp': 'svp senior vice president',
+            'evp': 'evp executive vice president',
+            'vp': 'vp vice president',
+            'avp': 'avp assistant vice president',
+            
+            # Other abbreviations
+            'gm': 'gm general manager',
+            'md': 'md managing director',
+            'bd': 'bd business development',
+            'r&d': 'r&d research and development research development',
+            'cmc': 'cmc chemistry manufacturing controls',
+            'qa': 'qa quality assurance',
+            'qc': 'qc quality control',
+            'ops': 'ops operations',
+            'mfg': 'mfg manufacturing',
+            'tech ops': 'tech ops technical operations',
+            'corp dev': 'corp dev corporate development business development bd',
+            'bus dev': 'bus dev business development bd',
+        }
+        
+        # ═══════════════════════════════════════════════════════════════
+        # NORMALIZE FULL TITLES TO INCLUDE ABBREVIATIONS
+        # ═══════════════════════════════════════════════════════════════
+        title_mappings = [
+            # C-Suite full titles
+            ('chief executive officer', ' ceo '),
+            ('chief operating officer', ' coo '),
+            ('chief financial officer', ' cfo '),
+            ('chief strategy officer', ' cso '),
+            ('chief scientific officer', ' cso '),
+            ('chief technology officer', ' cto '),
+            ('chief technical officer', ' cto '),
+            ('chief marketing officer', ' cmo '),
+            ('chief medical officer', ' cmo '),
+            ('chief business officer', ' cbo '),
+            ('chief commercial officer', ' cco '),
+            ('chief product officer', ' cpo '),
+            ('chief procurement officer', ' cpo '),
+            ('chief revenue officer', ' cro '),
+            ('chief research officer', ' cro '),
+            ('chief people officer', ' cpo '),
+            ('chief human resources officer', ' chro '),
+            
+            # VP variations
+            ('senior vice president', ' svp vp '),
+            ('executive vice president', ' evp vp '),
+            ('vice president', ' vp '),
+            ('vice-president', ' vp '),
+            ('assistant vice president', ' avp vp '),
+            
+            # Director variations
+            ('senior director', ' sr director director '),
+            ('associate director', ' assoc director ad '),
+            ('executive director', ' exec director director '),
+            ('managing director', ' md director '),
+            
+            # Manager variations
+            ('senior manager', ' sr manager manager '),
+            ('general manager', ' gm manager '),
+            
+            # Function expansions
+            ('business development', ' bd business '),
+            ('corporate development', ' corp dev corporate business development bd '),
+            ('research and development', ' r&d research development '),
+            ('research & development', ' r&d research development '),
+            ('technical operations', ' tech ops operations '),
+            ('chemistry manufacturing controls', ' cmc manufacturing '),
+            ('chemistry, manufacturing, and controls', ' cmc manufacturing '),
+            ('chemistry, manufacturing and controls', ' cmc manufacturing '),
+            ('supply chain', ' supply chain sourcing procurement '),
+            ('quality assurance', ' qa quality '),
+            ('quality control', ' qc quality '),
+            ('process development', ' process dev development '),
+            ('drug development', ' drug dev development '),
+            ('program management', ' program mgmt management '),
+            ('project management', ' project mgmt management '),
+            
+            # Common variations
+            (' & ', ' and '),
+            (' / ', ' '),
+            ('-', ' '),
+            (',', ' '),
+        ]
+        
+        # Apply mappings to create expanded title
+        for pattern, expansion in title_mappings:
+            if pattern in normalized:
+                normalized = normalized + expansion
+        
+        # Also check if abbreviations are present and expand them
+        words = title_lower.split()
+        for word in words:
+            if word in expansions:
+                normalized = normalized + ' ' + expansions[word]
+        
+        return normalized
+    
+    def has_word(self, text: str, word: str) -> bool:
+        """Check if word exists as a complete word (not substring) in text.
+        
+        Example: has_word("director of cmc", "cto") returns False
+                 has_word("cto of operations", "cto") returns True
+        """
+        import re
+        # Use word boundaries to match complete words only
+        pattern = r'\b' + re.escape(word) + r'\b'
+        return bool(re.search(pattern, text))
+    
+    def has_any_word(self, text: str, words: list) -> bool:
+        """Check if any word from list exists as complete word in text."""
+        return any(self.has_word(text, w) for w in words)
+    
+    def has_phrase(self, text: str, phrase: str) -> bool:
+        """Check if phrase exists in text (phrase matching, not word boundary)."""
+        return phrase in text
+    
+    def has_any_phrase(self, text: str, phrases: list) -> bool:
+        """Check if any phrase exists in text."""
+        return any(phrase in text for phrase in phrases)
+    
+    def score_title_relevance(self, title: str) -> int:
+        """Score title relevance (0-25 points)
+        
+        For a CDMO, relevant contacts include:
+        - C-Suite (all - they make strategic decisions)
+        - Manufacturing/Ops/Supply Chain (direct users)
+        - Strategy/BD/Corp Dev (partnership decision makers)
+        - R&D/Process Dev (influence technology selection)
+        - Finance (involved in make vs buy decisions)
+        """
+        if not title:
+            return 3  # Unknown title gets base points
+        
+        # Use normalized title for fuzzy matching
+        title_lower = self.normalize_title(title)
+        
+        # ═══════════════════════════════════════════════════════════════
+        # TIER 1: C-SUITE - All Chiefs are relevant (25 pts)
+        # Use word boundary matching to avoid "direCTOr" matching "cto"
+        # ═══════════════════════════════════════════════════════════════
+        c_suite_words = ['ceo', 'coo', 'cfo', 'cso', 'cto', 'cmo', 'cbo', 'cpo', 'cro']
+        c_suite_phrases = ['chief', 'president', 'founder', 'co-founder', 'managing director']
+        
+        if self.has_any_word(title_lower, c_suite_words) or self.has_any_phrase(title_lower, c_suite_phrases):
             return 25
         
-        primary = ['vp manufacturing', 'vp technical operations', 'vp operations',
-                  'vp supply chain', 'vp cmc', 'svp manufacturing', 'svp operations',
-                  'head of manufacturing', 'head of operations', 'head of supply chain']
-        if any(p in title for p in primary):
+        # ═══════════════════════════════════════════════════════════════
+        # TIER 2: VP/SVP - PRIMARY CONTACTS (20-22 pts)
+        # ═══════════════════════════════════════════════════════════════
+        # Direct manufacturing/ops VPs
+        vp_primary = ['vp manufacturing', 'vp technical operations', 'vp operations',
+                      'vp supply chain', 'vp cmc', 'svp manufacturing', 'svp operations',
+                      'vp production', 'vp tech ops', 'vp process']
+        if self.has_any_phrase(title_lower, vp_primary):
+            return 22
+        
+        # Strategy/BD VPs - they decide on partnerships
+        vp_strategic = ['vp strategy', 'vp business development', 'vp corporate development',
+                        'vp strategic', 'svp strategy', 'svp business', 'vp partnerships',
+                        'vp alliances', 'vp external']
+        if self.has_any_phrase(title_lower, vp_strategic):
             return 20
         
-        secondary = ['director manufacturing', 'director operations', 'director supply chain',
-                    'director cmc', 'senior director']
-        if any(s in title for s in secondary):
-            return 15
+        # R&D/Science VPs
+        vp_rd = ['vp r&d', 'vp research', 'vp development', 'vp science', 'vp preclinical',
+                 'svp r&d', 'svp research', 'vp drug development', 'vp biologics']
+        if self.has_any_phrase(title_lower, vp_rd):
+            return 18
         
-        if any(c in title for c in ['associate director', 'senior manager', 'manager']):
+        # General VP/SVP
+        if 'vp' in title_lower or 'vice president' in title_lower or 'svp' in title_lower:
+            return 16
+        
+        # ═══════════════════════════════════════════════════════════════
+        # TIER 3: DIRECTORS / HEADS (14-18 pts)
+        # ═══════════════════════════════════════════════════════════════
+        # Head of anything relevant
+        head_primary = ['head of manufacturing', 'head of operations', 'head of supply',
+                        'head of cmc', 'head of tech', 'head of production', 'head of process']
+        if any(h in title_lower for h in head_primary):
+            return 18
+        
+        head_strategic = ['head of strategy', 'head of business', 'head of corporate',
+                          'head of partnerships', 'head of alliances', 'head of external']
+        if any(h in title_lower for h in head_strategic):
+            return 16
+        
+        # Directors - manufacturing/ops
+        if 'director' in title_lower and 'associate' not in title_lower:
+            if any(d in title_lower for d in ['manufacturing', 'operations', 'supply', 'cmc', 'production', 'process']):
+                return 16
+            if any(d in title_lower for d in ['strategy', 'business', 'corporate', 'r&d', 'research', 'development']):
+                return 14
+            return 12  # Other director
+        
+        # General "Head of"
+        if 'head of' in title_lower:
+            return 14
+        
+        # ═══════════════════════════════════════════════════════════════
+        # TIER 4: SENIOR MANAGERS / ASSOCIATE DIRECTORS (8-10 pts)
+        # ═══════════════════════════════════════════════════════════════
+        if 'associate director' in title_lower:
+            return 10
+        if 'senior manager' in title_lower:
+            return 10
+        if 'principal' in title_lower:
             return 8
         
-        if any(l in title for l in ['scientist', 'research', 'clinical']):
-            return 3
+        # ═══════════════════════════════════════════════════════════════
+        # TIER 5: MANAGERS (5-6 pts)
+        # ═══════════════════════════════════════════════════════════════
+        if 'manager' in title_lower:
+            if any(m in title_lower for m in ['manufacturing', 'operations', 'supply', 'cmc', 'production']):
+                return 6
+            return 5
         
-        return 0
+        # ═══════════════════════════════════════════════════════════════
+        # TIER 6: OTHER (3-4 pts)
+        # ═══════════════════════════════════════════════════════════════
+        if any(s in title_lower for s in ['scientist', 'engineer', 'specialist', 'analyst', 'coordinator']):
+            return 4
+        
+        return 3  # Unknown/other
     
     def score_seniority(self, title: str) -> int:
         """Score seniority (0-20 points)"""
         if not title:
-            return 0
+            return 5  # Unknown gets base points
         
-        if any(c in title for c in ['ceo', 'coo', 'cso', 'cto', 'cfo', 'chief']):
+        # Use normalized title for fuzzy matching
+        title_lower = self.normalize_title(title)
+        
+        # C-Level
+        if any(c in title_lower for c in ['chief', 'ceo', 'coo', 'cfo', 'cso', 'cto', 'cmo', 'president', 'founder']):
             return 20
-        if any(v in title for v in ['vp', 'vice president', 'svp']):
+        
+        # VP/SVP
+        if any(v in title_lower for v in ['vp', 'vice president', 'svp', 'evp']):
             return 18
-        if 'head of' in title or ('director' in title and 'associate' not in title):
+        
+        # Head of / Director
+        if 'head of' in title_lower:
+            return 16
+        if 'director' in title_lower and 'associate' not in title_lower:
             return 15
-        if 'senior manager' in title or 'associate director' in title:
+        
+        # Senior Manager / Associate Director
+        if 'senior manager' in title_lower or 'associate director' in title_lower or 'principal' in title_lower:
             return 10
-        if 'manager' in title:
-            return 5
-        return 2
+        
+        # Manager
+        if 'manager' in title_lower:
+            return 6
+        
+        # Other
+        return 4
     
     def score_function_fit(self, title: str) -> int:
-        """Score function fit (0-20 points)"""
-        if not title:
-            return 0
+        """Score function fit (0-20 points)
         
-        if any(p in title for p in ['manufacturing', 'technical operations', 'cmc', 'supply chain']):
+        For a CDMO, relevant functions:
+        - Manufacturing/CMC/Supply Chain = PERFECT (directly use our services)
+        - Operations/Production/Quality = EXCELLENT
+        - Strategy/BD/Corp Dev = VERY GOOD (make partnership decisions!)
+        - R&D/Process Dev = GOOD (influence technology choices)
+        - Finance = RELEVANT (make vs buy decisions)
+        - Clinical/Regulatory = USEFUL
+        """
+        if not title:
+            return 5  # Unknown gets base points
+        
+        # Use normalized title for fuzzy matching
+        title_lower = self.normalize_title(title)
+        
+        # PERFECT FIT - Manufacturing/CMC/Supply Chain (20 pts)
+        if any(p in title_lower for p in ['manufacturing', 'cmc', 'supply chain', 'technical operations', 
+                                           'tech ops', 'production', 'bioprocessing']):
             return 20
-        if any(g in title for g in ['operations', 'production', 'quality']):
-            return 15
-        if any(a in title for a in ['r&d', 'research', 'development', 'process']):
+        
+        # EXCELLENT - Operations/Quality (18 pts)
+        if any(o in title_lower for o in ['operations', 'quality', 'gmp', 'compliance']):
+            return 18
+        
+        # VERY GOOD - Strategy/BD/Partnerships (16 pts)
+        # These people DECIDE on CDMO partnerships!
+        if any(s in title_lower for s in ['strategy', 'strategic', 'business development', 'corporate development',
+                                           'partnerships', 'alliances', 'external', 'sourcing', 'procurement']):
+            return 16
+        
+        # GOOD - R&D/Process Development (14 pts)
+        if any(r in title_lower for r in ['r&d', 'research', 'development', 'process development', 
+                                           'drug development', 'biologics', 'science', 'scientific']):
+            return 14
+        
+        # RELEVANT - Finance (make vs buy decisions) (12 pts)
+        if any(f in title_lower for f in ['finance', 'financial', 'cfo', 'controller', 'treasurer']):
+            return 12
+        
+        # USEFUL - Clinical/Regulatory (10 pts)
+        if any(c in title_lower for c in ['clinical', 'regulatory', 'medical', 'pharmacovigilance']):
             return 10
-        if any(l in title for l in ['clinical', 'regulatory', 'business']):
-            return 5
-        return 0
+        
+        # GENERAL C-SUITE - still relevant (14 pts)
+        if any(c in title_lower for c in ['chief', 'ceo', 'coo', 'president', 'founder']):
+            return 14
+        
+        # Commercial roles - less directly relevant but still contact (8 pts)
+        if any(m in title_lower for m in ['marketing', 'commercial', 'sales', 'market access']):
+            return 8
+        
+        # Other (5 pts)
+        return 5
     
     def score_decision_power(self, title: str) -> int:
         """Score decision power (0-15 points)"""
         if not title:
-            return 0
+            return 4  # Unknown gets base points
         
-        if any(b in title for b in ['ceo', 'coo', 'cfo', 'vp', 'svp', 'head of']):
+        # Use normalized title for fuzzy matching
+        title_lower = self.normalize_title(title)
+        
+        # Budget authority - C-suite and VPs (15 pts)
+        if any(b in title_lower for b in ['chief', 'ceo', 'coo', 'cfo', 'cso', 'cto', 'president', 'founder']):
             return 15
-        if 'director' in title and 'associate' not in title:
+        if any(v in title_lower for v in ['vp', 'vice president', 'svp', 'evp']):
+            return 15
+        
+        # Strong influence - Head of / Director (12 pts)
+        if 'head of' in title_lower:
             return 12
-        if 'senior manager' in title or 'associate director' in title:
+        if 'director' in title_lower and 'associate' not in title_lower:
+            return 12
+        
+        # Moderate influence - Senior Manager / AD (8 pts)
+        if 'senior manager' in title_lower or 'associate director' in title_lower or 'principal' in title_lower:
             return 8
-        if 'manager' in title:
-            return 4
-        return 0
+        
+        # Some influence - Manager (5 pts)
+        if 'manager' in title_lower:
+            return 5
+        
+        return 3
     
     def score_geography(self, location: str) -> int:
         """Score geography (0-5 points)"""
         if not location:
-            return 3
+            return 3  # Unknown gets base points
         
-        europe = ['germany', 'poland', 'uk', 'france', 'netherlands', 'switzerland',
-                 'belgium', 'sweden', 'denmark', 'austria', 'italy', 'spain']
-        if any(e in location for e in europe):
+        location_lower = location.lower()
+        
+        # Europe - priority (5 pts)
+        europe = ['germany', 'poland', 'uk', 'united kingdom', 'france', 'netherlands', 'switzerland',
+                 'belgium', 'sweden', 'denmark', 'austria', 'italy', 'spain', 'ireland', 'norway',
+                 'finland', 'portugal', 'czech', 'hungary', 'europe']
+        if any(e in location_lower for e in europe):
             return 5
         
-        us = ['usa', 'united states', 'california', 'massachusetts', 'new york']
-        if any(u in location for u in us):
+        # US - priority (5 pts)
+        us = ['usa', 'united states', 'california', 'massachusetts', 'new york', 'new jersey',
+              'maryland', 'north carolina', 'texas', 'boston', 'san francisco', 'san diego']
+        if any(u in location_lower for u in us):
+            return 5
+        
+        # Korea/Japan - strong markets (4 pts)
+        asia_priority = ['korea', 'south korea', 'japan', 'tokyo', 'seoul']
+        if any(a in location_lower for a in asia_priority):
             return 4
         
-        return 2
+        # Other Asia (3 pts)
+        other_asia = ['china', 'singapore', 'taiwan', 'hong kong', 'australia', 'india']
+        if any(o in location_lower for o in other_asia):
+            return 3
+        
+        return 2  # ROW
     
     def calculate_combined_priority(self, company_icp: int, lead_icp: int) -> str:
-        """Calculate combined priority"""
-        if company_icp >= 90 and lead_icp >= 70:
+        """Calculate combined priority based on company and lead ICP scores"""
+        # Company tiers: 80+ (T1), 65+ (T2), 50+ (T3), 35+ (T4)
+        # Lead tiers: 85+ (T1), 70+ (T2), 55+ (T3), 40+ (T4)
+        
+        if company_icp >= 80 and lead_icp >= 70:
             return "🔥 HOT - Priority 1"
-        elif company_icp >= 90 and lead_icp >= 55:
+        elif company_icp >= 80 and lead_icp >= 55:
             return "📈 WARM - Priority 2"
-        elif company_icp >= 75 and lead_icp >= 70:
+        elif company_icp >= 65 and lead_icp >= 70:
             return "📈 WARM - Priority 2"
-        elif company_icp >= 75 and lead_icp >= 55:
+        elif company_icp >= 65 and lead_icp >= 55:
             return "➡️ MEDIUM - Priority 3"
-        elif company_icp >= 60 and lead_icp >= 40:
+        elif company_icp >= 50 and lead_icp >= 40:
+            return "➡️ MEDIUM - Priority 3"
+        elif company_icp >= 35 and lead_icp >= 40:
             return "⬇️ LOW - Priority 4"
         else:
             return "❌ SKIP - Priority 5"
@@ -468,7 +792,7 @@ Name: {lead_name}
 Title: {title}
 Company: {company_name}
 Lead ICP Score: {lead_icp}/100
-Company ICP Score: {company_icp if company_icp else 'Unknown'}/105
+Company ICP Score: {company_icp if company_icp else 'Unknown'}/90
 
 YOUR COMPANY (Rezon Bio):
 - European CDMO specializing in mammalian cell culture
