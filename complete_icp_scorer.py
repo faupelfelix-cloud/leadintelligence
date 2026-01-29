@@ -226,7 +226,24 @@ ICP SCORING CRITERIA (Use these EXACT rules to score):
             
             prompt += "\n"
         
-        prompt += f"""TOTAL POSSIBLE SCORE: {self.get_total_score()} points
+        prompt += f"""TOTAL POSSIBLE SCORE: 90 points (max)
+
+NOTE ON COMPANY SIZE:
+- Small/mid companies (1-1000 employees): NO PENALTY (0 pts)
+- Large companies (1000-5000): -10 pts penalty
+- Big Pharma (5000+): -20 pts penalty
+- This means small funded biotechs with pipelines should score WELL
+
+FLOOR RULES (applied automatically after scoring):
+- Any company with a pipeline → minimum 40 pts (Tier 4)
+- Funded + pipeline → minimum 55 pts (Tier 3)
+
+TIER THRESHOLDS:
+- 80+ = Perfect Fit (Tier 1)
+- 65-79 = Strong Fit (Tier 2)
+- 50-64 = Good Fit (Tier 3)
+- 35-49 = Acceptable Fit (Tier 4)
+- <35 = Poor Fit (Tier 5)
 
 CRITICAL INSTRUCTIONS FOR SCORING:
 
@@ -263,14 +280,15 @@ CRITICAL INSTRUCTIONS FOR SCORING:
 
 3. BIG PHARMA HANDLING:
    - Big pharma (Sanofi, Pfizer, AstraZeneca, Roche, etc.) = POTENTIAL CUSTOMERS
-   - They score lower on size criteria but are still valuable
+   - They get size penalty (-20) but can still score decently on other criteria
    - Mark is_big_pharma = true for these
 
 4. SCORING GUIDANCE:
-   - ADC companies (Tubulis, Mersana, etc.) = HIGH PRIORITY (80-100)
-   - Biosimilar developers = HIGH PRIORITY (80-100)
-   - Mid-size mAb biotechs = PERFECT FIT (85-105)
-   - Big pharma with biologics = ACCEPTABLE (30-50, but still include)
+   - Small funded biotech with mAb pipeline = HIGH SCORE (65-85)
+   - ADC companies (Tubulis, Mersana, etc.) = HIGH PRIORITY (70-90)
+   - Biosimilar developers = HIGH PRIORITY (70-90)
+   - Mid-size mAb biotechs = PERFECT FIT (75-90)
+   - Big pharma with biologics = ACCEPTABLE (35-55, with size penalty)
 
 Search for {company_name} and assess using the criteria above.
 
@@ -293,17 +311,16 @@ Return JSON with scores for each criterion:
   "is_big_pharma": false,
   "exclusion_reason": null,
   "scores": {{
-    "company_size": {{"value": "50-300", "points": 15}},
-    "annual_revenue": {{"value": "$20M-$100M", "points": 15}},
-    "pipeline_stage": {{"value": "3-10 Early-Late Clinical", "points": 20}},
-    "production_technology": {{"value": "Purely mammalian", "points": 20}},
-    "geography": {{"value": "US", "points": 10}},
-    "funding": {{"value": "Series C+", "points": 10}},
-    "manufacturing_status": {{"value": "No public partner", "points": 10}},
-    "product_focus": {{"value": "NBEs", "points": 5}}
+    "company_size": {{"value": "50-300", "points": 0}},
+    "pipeline_stage": {{"value": "Phase 2/3", "points": 25}},
+    "production_technology": {{"value": "Mammalian/mAbs", "points": 20}},
+    "geography": {{"value": "Europe", "points": 10}},
+    "funding_stage": {{"value": "Series B", "points": 12}},
+    "manufacturing_need": {{"value": "No partner", "points": 15}},
+    "product_type": {{"value": "mAbs", "points": 5}}
   }},
   "total_score": X,
-  "tier": "Perfect Fit / Strong Fit / Acceptable / Low Priority / Excluded",
+  "tier": "Perfect Fit (Tier 1) / Strong Fit (Tier 2) / Good Fit (Tier 3) / Acceptable Fit (Tier 4) / Poor Fit (Tier 5)",
   "reasoning": "Brief explanation of why this score"
 }}
 
@@ -418,6 +435,69 @@ Search and assess now."""
                     'exclusion_reason': data.get('exclusion_reason')
                 }
                 
+                # ═══════════════════════════════════════════════════════════════
+                # FLOOR LOGIC: Ensure minimum scores for key signals
+                # ═══════════════════════════════════════════════════════════════
+                company_info = data.get('company_info', {})
+                scores_data = data.get('scores', {})
+                
+                # Check for pipeline
+                has_pipeline = False
+                pipeline_stage = None
+                pipeline_data = scores_data.get('pipeline_stage', {})
+                if isinstance(pipeline_data, dict):
+                    pipeline_value = pipeline_data.get('value', '').lower()
+                    pipeline_points = pipeline_data.get('points', 0)
+                    if pipeline_points > 0 or any(kw in pipeline_value for kw in ['phase', 'clinical', 'preclinical', 'commercial', 'approved']):
+                        has_pipeline = True
+                        pipeline_stage = pipeline_value
+                
+                # Check for funding
+                has_funding = False
+                funding_data = scores_data.get('funding', scores_data.get('funding_stage', {}))
+                if isinstance(funding_data, dict):
+                    funding_value = funding_data.get('value', '').lower()
+                    funding_points = funding_data.get('points', 0)
+                    if funding_points >= 5 or any(kw in funding_value for kw in ['series', 'public', 'ipo', 'seed']):
+                        has_funding = True
+                
+                # Apply floors
+                floor_applied = None
+                original_score = total_score
+                
+                # Floor 1: Any pipeline = minimum 40 pts (Tier 4)
+                if has_pipeline and total_score < 40:
+                    floor_applied = f"Pipeline Floor: Has {pipeline_stage or 'programs'} → minimum 40 pts"
+                    total_score = 40
+                
+                # Floor 2: Funded + pipeline = minimum 55 pts (Tier 3)
+                if has_funding and has_pipeline and total_score < 55:
+                    floor_applied = f"Funded Startup Floor: Has funding + pipeline → minimum 55 pts"
+                    total_score = 55
+                
+                # Update breakdown with floor info
+                if floor_applied:
+                    breakdown['floor_applied'] = floor_applied
+                    breakdown['original_score'] = original_score
+                    breakdown['total'] = total_score
+                    logger.info(f"  📊 {floor_applied} (was {original_score})")
+                
+                # ═══════════════════════════════════════════════════════════════
+                # DETERMINE TIER (new thresholds for max 90)
+                # ═══════════════════════════════════════════════════════════════
+                if total_score >= 80:
+                    tier = "Perfect Fit (Tier 1)"
+                elif total_score >= 65:
+                    tier = "Strong Fit (Tier 2)"
+                elif total_score >= 50:
+                    tier = "Good Fit (Tier 3)"
+                elif total_score >= 35:
+                    tier = "Acceptable Fit (Tier 4)"
+                else:
+                    tier = "Poor Fit (Tier 5)"
+                
+                breakdown['tier'] = tier
+                
                 return total_score, breakdown
                 
             except json.JSONDecodeError as e:
@@ -492,7 +572,18 @@ def test_scorer():
     print()
     print(f"Company Profile Loaded: {bool(scorer.company_profile)}")
     print(f"ICP Criteria Loaded: {len(scorer.criteria)} criteria")
-    print(f"Total Possible Score: {scorer.get_total_score()} points")
+    print(f"Max Score: 90 points")
+    print()
+    print("New Tier Thresholds:")
+    print("  80+ = Perfect Fit (Tier 1)")
+    print("  65-79 = Strong Fit (Tier 2)")
+    print("  50-64 = Good Fit (Tier 3)")
+    print("  35-49 = Acceptable Fit (Tier 4)")
+    print("  <35 = Poor Fit (Tier 5)")
+    print()
+    print("Floor Rules:")
+    print("  - Any pipeline → minimum 40 pts")
+    print("  - Funded + pipeline → minimum 55 pts")
     print()
     
     # Test with a few companies
@@ -509,11 +600,13 @@ def test_scorer():
     for company in test_companies:
         print(f"\n{company}:")
         score, breakdown = scorer.score_company(company)
-        print(f"  Score: {score}/{scorer.get_total_score()}")
+        print(f"  Score: {score}/90")
         if breakdown.get('is_competitor'):
             print(f"  Status: CDMO Competitor - Excluded")
         else:
             print(f"  Tier: {breakdown.get('tier', 'Unknown')}")
+            if breakdown.get('floor_applied'):
+                print(f"  Floor: {breakdown.get('floor_applied')}")
             print(f"  Reasoning: {breakdown.get('reasoning', 'N/A')[:100]}...")
 
 
