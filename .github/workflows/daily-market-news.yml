@@ -22,7 +22,7 @@ on:
         default: '5'
 
 jobs:
-  news-collection:
+  news-intelligence:
     runs-on: ubuntu-latest
     
     steps:
@@ -48,6 +48,7 @@ jobs:
           tables:
             companies: "Companies"
             leads: "Leads"
+            intelligence_log: "Intelligence Log"
         
         anthropic:
           api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
@@ -76,7 +77,8 @@ jobs:
           echo "Listing sources..."
           python market_news_intelligence.py --list-sources
         else
-          echo "Running full analysis..."
+          echo "Running full integrated analysis..."
+          echo "(Includes: news analysis → company enrichment → lead search/enrichment → outreach generation → trigger creation)"
           python market_news_intelligence.py --threshold ${{ github.event.inputs.relevance_threshold || '5' }}
         fi
     
@@ -88,57 +90,3 @@ jobs:
         path: |
           *.log
         retention-days: 7
-
-  # Optional: Run follow-up enrichment for new companies/leads
-  enrichment:
-    needs: news-collection
-    runs-on: ubuntu-latest
-    if: success() && github.event.inputs.mode != 'init' && github.event.inputs.mode != 'list-sources'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install anthropic pyairtable pyyaml requests
-    
-    - name: Create config file
-      run: |
-        cat > config.yaml << EOF
-        airtable:
-          api_key: "${{ secrets.AIRTABLE_API_KEY }}"
-          base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
-          tables:
-            companies: "Companies"
-            leads: "Leads"
-        
-        anthropic:
-          api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
-          model: "claude-sonnet-4-20250514"
-        
-        web_search:
-          rate_limit_delay: 2
-        EOF
-    
-    - name: Enrich new companies (limit 5)
-      env:
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-      run: |
-        python enrich_companies.py --limit 5 || true
-    
-    - name: Generate trigger outreach
-      env:
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-      run: |
-        python generate_trigger_outreach.py --limit 10 || true
