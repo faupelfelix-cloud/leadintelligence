@@ -279,17 +279,19 @@ class CampaignLeadsProcessor:
             campaign_background = campaign_fields.get('Campaign Background', '')
             campaign_date = campaign_fields.get('Campaign Date', '')
             
-            # Map campaign type to trigger type
+            # Map campaign type to existing Airtable trigger types
+            # Valid options: CONFERENCE_ATTENDANCE, FUNDING, PROMOTION, JOB_CHANGE, 
+            #               PIPELINE, SPEAKING, PAIN_POINT, OTHER
             if campaign_type == 'Conference' or conference_name:
-                trigger_type = 'CONFERENCE'
-            elif campaign_type == 'Event':
-                trigger_type = 'EVENT'
+                trigger_type = 'CONFERENCE_ATTENDANCE'
             elif campaign_type == 'Funding':
                 trigger_type = 'FUNDING'
             elif campaign_type == 'Pipeline':
                 trigger_type = 'PIPELINE'
+            elif campaign_type == 'Speaking':
+                trigger_type = 'SPEAKING'
             else:
-                trigger_type = 'CAMPAIGN'
+                trigger_type = 'OTHER'
             
             # Build description
             description_parts = []
