@@ -281,9 +281,11 @@ class CampaignLeadsProcessor:
             
             # Map campaign type to existing Airtable trigger types
             # Valid options: CONFERENCE_ATTENDANCE, FUNDING, PROMOTION, JOB_CHANGE, 
-            #               PIPELINE, SPEAKING, PAIN_POINT, OTHER
+            #               PIPELINE, SPEAKING, PAIN_POINT, ROADSHOW, OTHER
             if campaign_type == 'Conference' or conference_name:
                 trigger_type = 'CONFERENCE_ATTENDANCE'
+            elif campaign_type == 'Roadshow':
+                trigger_type = 'ROADSHOW'
             elif campaign_type == 'Funding':
                 trigger_type = 'FUNDING'
             elif campaign_type == 'Pipeline':
@@ -305,7 +307,9 @@ class CampaignLeadsProcessor:
             description = " | ".join(description_parts) if description_parts else f"Campaign outreach to {lead_name}"
             
             # Build outreach angle
-            if conference_name:
+            if campaign_type == 'Roadshow':
+                outreach_angle = f"Roadshow visit - discuss manufacturing partnership opportunities"
+            elif conference_name:
                 outreach_angle = f"Meeting at {conference_name} - discuss manufacturing needs"
             elif campaign_background:
                 outreach_angle = campaign_background[:200]
@@ -399,6 +403,18 @@ This is conference outreach - the conference is the REASON for reaching out.
 - Mention you'll be at {conference_name}
 - Suggest meeting at the event
 - Keep it natural - like reaching out to someone you'd like to meet
+"""
+        elif campaign_type == 'Roadshow':
+            campaign_section = f"""
+CAMPAIGN: Roadshow outreach
+Date: {campaign_date}
+Background: {campaign_background}
+
+This is roadshow outreach - you're visiting their region/city.
+- Mention you'll be in their area for meetings
+- Suggest meeting while you're there
+- Frame it as convenient timing for both parties
+- Keep it natural and low-pressure
 """
         elif campaign_background:
             campaign_section = f"""
