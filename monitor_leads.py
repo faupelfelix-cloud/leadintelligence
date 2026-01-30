@@ -226,52 +226,59 @@ Company Context:
 
 Your mission: Monitor this lead's recent activity and identify relevant updates and trigger events for business development outreach.
 
-CRITICAL FILTERING RULES:
-- Today's date is: {datetime.now().strftime('%Y-%m-%d')}
-- ONLY report information from the {period} (since {cutoff_date})
-- IGNORE any news, posts, or events OLDER than {cutoff_date}
-- ONLY report FUTURE conferences (starting today or later)
+═══════════════════════════════════════════════════════════════════
+CRITICAL DATE FILTERING - READ CAREFULLY
+═══════════════════════════════════════════════════════════════════
+Today's date: {datetime.now().strftime('%Y-%m-%d')}
+Cutoff date: {cutoff_date}
+Lookback period: {actual_lookback} days
+
+STRICT RULES:
+1. ONLY report information dated {cutoff_date} or later
+2. COMPLETELY IGNORE anything before {cutoff_date}
+3. If you find news from December 2025 or earlier January 2026, CHECK THE DATE
+4. If the date is before {cutoff_date}, DO NOT INCLUDE IT
+5. For EVERY piece of information, verify its date is >= {cutoff_date}
+
+Examples of what to EXCLUDE (if cutoff is {cutoff_date}):
+- News article from 2025-12-15 → EXCLUDE (too old)
+- LinkedIn post from 2025-12-28 → EXCLUDE (too old) 
+- Funding announcement from early January → CHECK DATE, exclude if before {cutoff_date}
+
+Examples of what to INCLUDE:
+- News from {cutoff_date} or later → INCLUDE
+- Future conferences (any date in the future) → INCLUDE
+═══════════════════════════════════════════════════════════════════
+
+TECHNOLOGY FILTERING:
 - ONLY include mammalian cell culture biologics (mAbs, bispecific antibodies, ADCs, Fc-fusion proteins)
 - EXCLUDE: Cell therapy, gene therapy, viral vectors, plasmids, mRNA, oligonucleotides, vaccines
 - If in doubt about technology platform, CHECK the company's pipeline/technology
 
-DO NOT report:
-- News older than 30 days
-- Past conferences or events
-- Cell/gene therapy companies
-- Non-mammalian modalities
+SEARCH for activity ONLY from {cutoff_date} onwards:
 
-SEARCH EXTENSIVELY for activity in the {period}:
-
-📱 LINKEDIN ACTIVITY:
+📱 LINKEDIN ACTIVITY (posts dated {cutoff_date} or later):
 - Recent posts and their themes
-- What topics are they discussing?
 - Job changes, promotions, role updates
 - Company announcements they've shared
-- Who they're engaging with (comments, likes)
-- New connections or endorsements
+- Who they're engaging with
 
-🐦 X (TWITTER) ACTIVITY (if they have X profile):
+🐦 X (TWITTER) ACTIVITY (tweets dated {cutoff_date} or later):
 - Recent tweets and topics
 - Tone and sentiment
-- Industry discussions they're participating in
-- Conference mentions or event attendance
-- Retweets and engagement patterns
+- Industry discussions
+- Conference mentions
 
 📅 CONFERENCES & EVENTS:
-- ONLY upcoming/future conferences (not past events)
+- ONLY upcoming/future conferences (starting {datetime.now().strftime('%Y-%m-%d')} or later)
 - Upcoming speaking engagements
-- Conferences they'll attend (search conference websites)
-- Panel discussions or presentations
-- Networking events mentioned
-- Include specific dates and verify they are in the future
+- Include specific dates and verify they are IN THE FUTURE
 
-🏢 COMPANY NEWS:
+🏢 COMPANY NEWS (dated {cutoff_date} or later):
 - Funding announcements
 - Pipeline updates (IND filings, trial results, approvals)
 - Partnership announcements
 - Hiring activity in CMC/manufacturing roles
-- Press releases mentioning the lead or company
 
 🎯 TRIGGER EVENTS (High Priority):
 Identify actionable trigger events using ONLY these types:
@@ -297,69 +304,70 @@ IMPORTANT:
 - Engagement patterns (who they interact with)
 - Sentiment changes (positive/negative tone)
 
+BEFORE RETURNING RESULTS - DATE VALIDATION:
+1. For EVERY item with a date, verify the date is {cutoff_date} or later
+2. If NO activity found since {cutoff_date}, return empty arrays
+3. Do NOT include old news just to have something to report
+4. It's better to report "no recent activity" than to include outdated information
+
 Return your findings in this exact JSON format:
 {{
   "linkedin_activity": {{
-    "posts_count": 3,
+    "posts_count": 0,
     "recent_posts": [
-      {{"date": "2026-01-20", "topic": "ADC manufacturing challenges", "engagement": "50+ likes", "key_quote": "Brief quote if relevant"}},
-      ...
+      {{"date": "YYYY-MM-DD", "topic": "...", "engagement": "...", "key_quote": "..."}}
     ],
-    "themes": ["CMC challenges", "Hiring", "Conference prep"],
-    "engagement_level": "High/Medium/Low",
-    "notable_interactions": ["Engaged with Lonza post about scale-up"]
+    "themes": [],
+    "engagement_level": "None/Low/Medium/High",
+    "notable_interactions": []
   }},
   "x_activity": {{
-    "active": true/false,
-    "tweets_count": 5,
-    "recent_tweets": [
-      {{"date": "2026-01-21", "topic": "BIO conference", "content": "Brief summary"}},
-      ...
-    ],
-    "themes": ["Conference attendance", "Industry trends"],
-    "tone": "Professional/Casual/Technical"
+    "active": false,
+    "tweets_count": 0,
+    "recent_tweets": [],
+    "themes": [],
+    "tone": "N/A"
   }},
   "conferences_events": [
     {{
-      "event": "BIO-Europe Spring", 
-      "date": "March 2025", 
-      "location": "Barcelona, Spain",
+      "event": "Conference Name", 
+      "date": "YYYY-MM-DD (must be future)", 
+      "location": "City, Country",
       "role": "Speaker/Attendee/Panelist", 
-      "topic": "Bispecific manufacturing (if speaking)",
-      "booth_visiting": "List of CDMO booths they mentioned visiting (if any)",
-      "networking_intent": "Any signals about networking goals"
-    }},
-    ...
+      "topic": "Topic if speaking"
+    }}
   ],
   "company_news": [
-    {{"date": "2026-01-15", "headline": "Series C funding $50M", "relevance": "Will need scale-up manufacturing"}},
-    ...
+    {{"date": "YYYY-MM-DD (must be >= {cutoff_date})", "headline": "...", "relevance": "..."}}
   ],
   "trigger_events": [
     {{
       "type": "FUNDING/PROMOTION/SPEAKING/CONFERENCE_ATTENDANCE/HIRING/PIPELINE/PARTNERSHIP/AWARD/PAIN_POINT/JOB_CHANGE",
-      "date": "2026-01-15",
+      "date": "YYYY-MM-DD (must be >= {cutoff_date})",
       "description": "Detailed description",
       "urgency": "HIGH/MEDIUM/LOW",
       "outreach_angle": "How to leverage this for outreach",
-      "timing_recommendation": "Reach out in next 2 weeks / Wait until after conference / etc",
-      "sources": ["https://url1.com", "https://url2.com"]
-    }},
-    ...
+      "timing_recommendation": "...",
+      "sources": ["https://url1.com"]
+    }}
   ],
   "behavioral_insights": {{
-    "activity_change": "Increased by 50% vs previous period",
-    "topic_shifts": ["Now focused more on regulatory vs technical"],
-    "sentiment": "Positive - excited about company progress",
-    "engagement_patterns": "Actively engaging with CDMO content"
+    "activity_change": "Description or 'No recent activity detected'",
+    "topic_shifts": [],
+    "sentiment": "Unknown - insufficient recent data",
+    "engagement_patterns": "..."
   }},
-  "summary": "2-3 sentence executive summary of key findings",
-  "recommendation": "HIGH PRIORITY: Reach out now / MEDIUM: Monitor / LOW: No urgent action",
-  "last_updated": "2026-01-23",
-  "data_quality": "High/Medium/Low - how confident are you in these findings"
+  "summary": "2-3 sentence summary. If no activity since {cutoff_date}, say 'No significant activity detected in the past {actual_lookback} days.'",
+  "recommendation": "HIGH PRIORITY / MEDIUM / LOW / NO ACTION - No recent activity",
+  "cutoff_date_used": "{cutoff_date}",
+  "data_quality": "High/Medium/Low/None - None if no recent activity found"
 }}
 
-CRITICAL: Focus on ACTIONABLE intelligence. Prioritize trigger events that create outreach opportunities. If there's no significant activity, say so clearly.
+CRITICAL REMINDERS:
+- If you find NO activity since {cutoff_date}, return empty arrays and state "No recent activity"
+- Do NOT pad results with old information
+- Every date in your response MUST be >= {cutoff_date} (except future conference dates)
+- Focus on ACTIONABLE, RECENT intelligence only
 
 Only return valid JSON, no other text."""
 
