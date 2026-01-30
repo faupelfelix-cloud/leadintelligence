@@ -420,6 +420,10 @@ Only return valid JSON, no other text."""
             
             try:
                 activity_data = json.loads(result_text)
+                
+                # POST-PROCESSING: Validate and filter dates
+                activity_data = self._filter_by_cutoff_date(activity_data, cutoff_date)
+                
                 logger.info(f"  ✓ Activity monitoring complete")
                 return activity_data
             except json.JSONDecodeError as json_err:
@@ -435,6 +439,126 @@ Only return valid JSON, no other text."""
                 "recommendation": "RETRY",
                 "last_updated": datetime.now().strftime('%Y-%m-%d')
             }
+    
+    def _filter_by_cutoff_date(self, activity_data: Dict, cutoff_date: str) -> Dict:
+        """Filter out any items with dates before the cutoff date.
+        
+        This is a safety net in case the AI includes old information despite instructions.
+        """
+        try:
+            cutoff = datetime.strptime(cutoff_date, '%Y-%m-%d')
+            today = datetime.now()
+            filtered_count = 0
+            
+            def is_valid_date(date_str: str, allow_future: bool = False) -> bool:
+                """Check if date is >= cutoff (and optionally in future for conferences)"""
+                if not date_str:
+                    return False
+                try:
+                    # Handle various date formats
+                    date_str_clean = date_str.strip()
+                    
+                    # Try YYYY-MM-DD format
+                    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str_clean):
+                        parsed = datetime.strptime(date_str_clean, '%Y-%m-%d')
+                    # Try DD.MM.YYYY format
+                    elif re.match(r'^\d{1,2}\.\d{1,2}\.\d{4}$', date_str_clean):
+                        parsed = datetime.strptime(date_str_clean, '%d.%m.%Y')
+                    # Try "Month YYYY" format (e.g., "March 2026")
+                    elif re.match(r'^[A-Za-z]+ \d{4}$', date_str_clean):
+                        parsed = datetime.strptime(date_str_clean, '%B %Y')
+                    # Try "DD Month YYYY" format
+                    elif re.match(r'^\d{1,2} [A-Za-z]+ \d{4}$', date_str_clean):
+                        parsed = datetime.strptime(date_str_clean, '%d %B %Y')
+                    else:
+                        # Can't parse - be lenient and include it
+                        return True
+                    
+                    if allow_future:
+                        # For conferences, only check it's in the future
+                        return parsed >= today
+                    else:
+                        # For news/posts, must be >= cutoff
+                        return parsed >= cutoff
+                        
+                except (ValueError, TypeError):
+                    # If we can't parse the date, include it (benefit of doubt)
+                    return True
+            
+            # Filter LinkedIn posts
+            if 'linkedin_activity' in activity_data and activity_data['linkedin_activity']:
+                linkedin = activity_data['linkedin_activity']
+                if 'recent_posts' in linkedin and linkedin['recent_posts']:
+                    original_count = len(linkedin['recent_posts'])
+                    linkedin['recent_posts'] = [
+                        p for p in linkedin['recent_posts'] 
+                        if is_valid_date(p.get('date', ''))
+                    ]
+                    filtered_count += original_count - len(linkedin['recent_posts'])
+                    linkedin['posts_count'] = len(linkedin['recent_posts'])
+            
+            # Filter X/Twitter activity
+            if 'x_activity' in activity_data and activity_data['x_activity']:
+                x_activity = activity_data['x_activity']
+                if 'recent_tweets' in x_activity and x_activity['recent_tweets']:
+                    original_count = len(x_activity['recent_tweets'])
+                    x_activity['recent_tweets'] = [
+                        t for t in x_activity['recent_tweets']
+                        if is_valid_date(t.get('date', ''))
+                    ]
+                    filtered_count += original_count - len(x_activity['recent_tweets'])
+                    x_activity['tweets_count'] = len(x_activity['recent_tweets'])
+            
+            # Filter company news
+            if 'company_news' in activity_data and activity_data['company_news']:
+                original_count = len(activity_data['company_news'])
+                activity_data['company_news'] = [
+                    n for n in activity_data['company_news']
+                    if is_valid_date(n.get('date', ''))
+                ]
+                filtered_count += original_count - len(activity_data['company_news'])
+            
+            # Filter conferences (must be in future, not just >= cutoff)
+            if 'conferences_events' in activity_data and activity_data['conferences_events']:
+                original_count = len(activity_data['conferences_events'])
+                activity_data['conferences_events'] = [
+                    c for c in activity_data['conferences_events']
+                    if is_valid_date(c.get('date', ''), allow_future=True)
+                ]
+                filtered_count += original_count - len(activity_data['conferences_events'])
+            
+            # Filter trigger events - CRITICAL
+            if 'trigger_events' in activity_data and activity_data['trigger_events']:
+                original_count = len(activity_data['trigger_events'])
+                valid_triggers = []
+                for trigger in activity_data['trigger_events']:
+                    trigger_date = trigger.get('date', '')
+                    trigger_type = trigger.get('type', '').upper()
+                    
+                    # For conferences/speaking, check if the event is in the future
+                    if trigger_type in ['SPEAKING', 'CONFERENCE_ATTENDANCE']:
+                        if is_valid_date(trigger_date, allow_future=True):
+                            valid_triggers.append(trigger)
+                        else:
+                            logger.warning(f"    Filtered out old {trigger_type} trigger: {trigger_date}")
+                    else:
+                        # For other triggers, must be >= cutoff
+                        if is_valid_date(trigger_date, allow_future=False):
+                            valid_triggers.append(trigger)
+                        else:
+                            logger.warning(f"    Filtered out old {trigger_type} trigger: {trigger_date}")
+                
+                activity_data['trigger_events'] = valid_triggers
+                filtered_count += original_count - len(valid_triggers)
+            
+            if filtered_count > 0:
+                logger.info(f"  ⚠ Filtered {filtered_count} items with dates before {cutoff_date}")
+            
+            return activity_data
+            
+        except Exception as e:
+            logger.warning(f"  Date filtering failed: {e} - returning unfiltered data")
+            return activity_data
     
     def format_activity_report(self, activity_data: Dict) -> str:
         """Format activity data into readable report for Airtable"""
