@@ -1435,8 +1435,7 @@ Return ONLY JSON."""
             
             # Update company record
             update_fields = {
-                'Enrichment Status': 'Enriched',
-                'Last Enriched': datetime.now().strftime('%Y-%m-%d')
+                'Enrichment Status': 'Enriched'
             }
             
             if data.get('website'):
@@ -1475,11 +1474,10 @@ Return ONLY JSON."""
             try:
                 self.companies_table.update(company_id, update_fields)
             except Exception as e:
-                # Try with minimal fields
+                # Try with minimal fields only
                 logger.debug(f"Full update failed: {e}")
                 minimal = {
-                    'Enrichment Status': 'Enriched',
-                    'Last Enriched': datetime.now().strftime('%Y-%m-%d')
+                    'Enrichment Status': 'Enriched'
                 }
                 if data.get('website'):
                     minimal['Website'] = data['website']
@@ -1487,7 +1485,12 @@ Return ONLY JSON."""
                     minimal['Location/HQ'] = data['location']
                 if data.get('icp_score'):
                     minimal['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
-                self.companies_table.update(company_id, minimal)
+                try:
+                    self.companies_table.update(company_id, minimal)
+                except Exception as e2:
+                    logger.debug(f"Minimal update also failed: {e2}")
+                    # Last resort - just mark as enriched
+                    self.companies_table.update(company_id, {'Enrichment Status': 'Enriched'})
             
             return data
             
@@ -1573,7 +1576,7 @@ Return ONLY JSON."""
             # Update lead record
             update_fields = {
                 'Enrichment Status': 'Enriched',
-                'Last Enriched': datetime.now().strftime('%Y-%m-%d'),
+                'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d'),
                 'Lead ICP Score': lead_icp
             }
             
@@ -1591,10 +1594,13 @@ Return ONLY JSON."""
             except Exception as e:
                 logger.debug(f"Lead update error: {e}")
                 # Try minimal
-                self.leads_table.update(lead_id, {
-                    'Enrichment Status': 'Enriched',
-                    'Last Enriched': datetime.now().strftime('%Y-%m-%d')
-                })
+                try:
+                    self.leads_table.update(lead_id, {
+                        'Enrichment Status': 'Enriched',
+                        'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d')
+                    })
+                except:
+                    pass
             
             return {
                 'email': data.get('email'),
@@ -1937,8 +1943,7 @@ Return ONLY JSON."""
                 company_id, is_new_company = result
                 if is_new_company:
                     stats['companies_created'] += 1
-                    if self.company_enricher:
-                        stats['companies_enriched'] += 1
+                    stats['companies_enriched'] += 1  # Inline enrichment runs automatically
                 
                 # STEP 2: Find existing lead OR search for new lead
                 lead_result = self.find_existing_lead(company_id, company_name)
