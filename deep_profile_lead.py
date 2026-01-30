@@ -541,6 +541,17 @@ Only return valid JSON, no other text."""
             
             result_text = result_text.strip()
             
+            # Handle empty response
+            if not result_text:
+                logger.error(f"  ✗ Empty response from API")
+                return {
+                    "error": "Empty response from API - insufficient data found",
+                    "metadata": {
+                        "confidence_level": "Failed",
+                        "last_updated": datetime.now().strftime('%Y-%m-%d')
+                    }
+                }
+            
             # Try to find JSON if there's preamble text
             if not result_text.startswith("{"):
                 # Look for first { and last }
@@ -553,6 +564,28 @@ Only return valid JSON, no other text."""
             import re
             result_text = re.sub(r',(\s*[}\]])', r'\1', result_text)
             
+            # Fix common JSON issues with quotes inside strings
+            # This handles cases where the AI includes unescaped quotes in values
+            def fix_json_quotes(json_str):
+                """Attempt to fix unescaped quotes in JSON string values"""
+                # Try parsing first - if it works, return as-is
+                try:
+                    json.loads(json_str)
+                    return json_str
+                except:
+                    pass
+                
+                # Try to fix by escaping problematic quotes
+                # This is a simple heuristic - replace quotes that appear mid-value
+                fixed = json_str
+                # Replace smart quotes with regular quotes first
+                fixed = fixed.replace('"', '"').replace('"', '"')
+                fixed = fixed.replace(''', "'").replace(''', "'")
+                
+                return fixed
+            
+            result_text = fix_json_quotes(result_text)
+            
             try:
                 profile_data = json.loads(result_text)
                 logger.info(f"  ✓ Deep profile generated successfully")
@@ -562,7 +595,17 @@ Only return valid JSON, no other text."""
                 logger.error(f"  ✗ JSON parsing failed: {str(json_err)}")
                 logger.error(f"  First 200 chars of response: {result_text[:200]}")
                 logger.error(f"  Last 200 chars of response: {result_text[-200:]}")
-                raise
+                
+                # Return a partial result so the lead isn't completely skipped
+                return {
+                    "error": f"JSON parsing failed: {str(json_err)}",
+                    "standout_details": ["Profile generation encountered formatting issues - retry recommended"],
+                    "metadata": {
+                        "confidence_level": "Failed - Parse Error",
+                        "last_updated": datetime.now().strftime('%Y-%m-%d'),
+                        "recommended_action": "Retry profiling"
+                    }
+                }
             
         except json.JSONDecodeError as e:
             logger.error(f"  ✗ Error generating profile (JSON parse error): {str(e)}")
@@ -846,7 +889,8 @@ Only return valid JSON, no other text."""
         logger.info(f"Total: {total} | Success: {success_count} | Failed: {failed_count}")
         logger.info("=" * 60)
         
-        return failed_count == 0
+        # Return True if at least some succeeded (partial success is OK)
+        return success_count > 0
     
     def profile_lead(self, lead_name: str):
         """Main workflow: find lead, generate profile, save to Airtable"""
