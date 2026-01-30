@@ -1,0 +1,208 @@
+name: Monitor Lead Activity (Surveillance)
+
+on:
+  schedule:
+    # Weekly on Monday at 7 AM UTC - runs appropriate tiers based on date
+    - cron: '0 7 * * 1'
+    # Extra run on 15th at 7 AM UTC for bi-weekly tier
+    - cron: '0 7 15 * *'
+  
+  # Manual trigger with tier selection
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Which tier to run (auto = based on date)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - all
+          - weekly
+          - biweekly
+          - monthly
+          - monthly-company
+          - legacy
+      limit:
+        description: 'Max leads per tier (default: 20)'
+        required: false
+        default: '20'
+        type: string
+      min_icp:
+        description: 'Min ICP (only for legacy mode)'
+        required: false
+        default: '50'
+        type: string
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Determine tiers to run
+      id: tiers
+      run: |
+        TIER="${{ github.event.inputs.tier || 'auto' }}"
+        DAY_OF_MONTH=$(date +%-d)
+        DAY_OF_WEEK=$(date +%u)  # 1=Monday
+        
+        echo "Input tier: $TIER"
+        echo "Day of month: $DAY_OF_MONTH"
+        echo "Day of week: $DAY_OF_WEEK (1=Mon)"
+        
+        if [ "$TIER" = "legacy" ]; then
+          echo "mode=legacy" >> $GITHUB_OUTPUT
+        elif [ "$TIER" = "all" ]; then
+          echo "mode=tiered" >> $GITHUB_OUTPUT
+          echo "run_weekly=true" >> $GITHUB_OUTPUT
+          echo "run_biweekly=true" >> $GITHUB_OUTPUT
+          echo "run_monthly=true" >> $GITHUB_OUTPUT
+          echo "run_company=true" >> $GITHUB_OUTPUT
+        elif [ "$TIER" = "weekly" ]; then
+          echo "mode=tiered" >> $GITHUB_OUTPUT
+          echo "run_weekly=true" >> $GITHUB_OUTPUT
+          echo "run_biweekly=false" >> $GITHUB_OUTPUT
+          echo "run_monthly=false" >> $GITHUB_OUTPUT
+          echo "run_company=false" >> $GITHUB_OUTPUT
+        elif [ "$TIER" = "biweekly" ]; then
+          echo "mode=tiered" >> $GITHUB_OUTPUT
+          echo "run_weekly=false" >> $GITHUB_OUTPUT
+          echo "run_biweekly=true" >> $GITHUB_OUTPUT
+          echo "run_monthly=false" >> $GITHUB_OUTPUT
+          echo "run_company=false" >> $GITHUB_OUTPUT
+        elif [ "$TIER" = "monthly" ]; then
+          echo "mode=tiered" >> $GITHUB_OUTPUT
+          echo "run_weekly=false" >> $GITHUB_OUTPUT
+          echo "run_biweekly=false" >> $GITHUB_OUTPUT
+          echo "run_monthly=true" >> $GITHUB_OUTPUT
+          echo "run_company=false" >> $GITHUB_OUTPUT
+        elif [ "$TIER" = "monthly-company" ]; then
+          echo "mode=tiered" >> $GITHUB_OUTPUT
+          echo "run_weekly=false" >> $GITHUB_OUTPUT
+          echo "run_biweekly=false" >> $GITHUB_OUTPUT
+          echo "run_monthly=false" >> $GITHUB_OUTPUT
+          echo "run_company=true" >> $GITHUB_OUTPUT
+        else
+          # Auto mode - determine based on date
+          echo "mode=tiered" >> $GITHUB_OUTPUT
+          
+          # Weekly always runs on Monday
+          if [ "$DAY_OF_WEEK" = "1" ]; then
+            echo "run_weekly=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_weekly=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Bi-weekly on 1st and 15th
+          if [ "$DAY_OF_MONTH" = "1" ] || [ "$DAY_OF_MONTH" = "15" ]; then
+            echo "run_biweekly=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_biweekly=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Monthly only on 1st
+          if [ "$DAY_OF_MONTH" = "1" ]; then
+            echo "run_monthly=true" >> $GITHUB_OUTPUT
+            echo "run_company=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_monthly=false" >> $GITHUB_OUTPUT
+            echo "run_company=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+    
+    - name: "Legacy Mode: Monitor all leads with ICP >= threshold"
+      if: steps.tiers.outputs.mode == 'legacy'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        LIMIT="${{ github.event.inputs.limit }}"
+        MIN_ICP="${{ github.event.inputs.min_icp || '50' }}"
+        
+        echo "=============================================="
+        echo "LEGACY MODE - LEAD SURVEILLANCE"
+        echo "Minimum ICP: $MIN_ICP"
+        echo "=============================================="
+        
+        if [ -n "$LIMIT" ] && [ "$LIMIT" != "20" ]; then
+          python monitor_leads.py --limit $LIMIT --min-icp $MIN_ICP
+        else
+          python monitor_leads.py --min-icp $MIN_ICP
+        fi
+    
+    - name: "Tier 1: Weekly High-Priority (ICP 75+, 7-day lookback)"
+      if: steps.tiers.outputs.mode == 'tiered' && steps.tiers.outputs.run_weekly == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "=============================================="
+        echo "TIER 1: WEEKLY HIGH-PRIORITY"
+        echo "ICP: 75+  |  Lookback: 7 days"
+        echo "=============================================="
+        python monitor_leads.py --tier weekly --limit ${{ github.event.inputs.limit || '20' }}
+    
+    - name: "Tier 2: Bi-Weekly Medium-Priority (ICP 50-74, 14-day lookback)"
+      if: steps.tiers.outputs.mode == 'tiered' && steps.tiers.outputs.run_biweekly == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "=============================================="
+        echo "TIER 2: BI-WEEKLY MEDIUM-PRIORITY"
+        echo "ICP: 50-74  |  Lookback: 14 days"
+        echo "=============================================="
+        python monitor_leads.py --tier biweekly --limit ${{ github.event.inputs.limit || '30' }}
+    
+    - name: "Tier 3: Monthly Lower-Priority (ICP 30-49, 30-day lookback)"
+      if: steps.tiers.outputs.mode == 'tiered' && steps.tiers.outputs.run_monthly == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "=============================================="
+        echo "TIER 3: MONTHLY LOWER-PRIORITY"
+        echo "ICP: 30-49  |  Lookback: 30 days"
+        echo "=============================================="
+        python monitor_leads.py --tier monthly --limit ${{ github.event.inputs.limit || '50' }}
+    
+    - name: "Tier 4: Monthly Company-ICP (Lead <30, Company 50+, 30-day lookback)"
+      if: steps.tiers.outputs.mode == 'tiered' && steps.tiers.outputs.run_company == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        echo "=============================================="
+        echo "TIER 4: MONTHLY COMPANY-ICP"
+        echo "Lead ICP: <30, Company ICP: 50+"
+        echo "Lookback: 30 days"
+        echo "=============================================="
+        python monitor_leads.py --tier monthly-company --limit ${{ github.event.inputs.limit || '30' }}
+    
+    - name: Upload surveillance log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: surveillance-log-${{ github.run_id }}
+        path: surveillance.log
+        retention-days: 90
