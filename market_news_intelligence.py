@@ -1336,21 +1336,27 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
                 )
                 if enriched_lead:
                     logger.info(f"  ✓ Lead enriched - ICP: {enriched_lead.get('lead_icp', 'N/A')}")
-                    
-                    # GENERATE OUTREACH
-                    logger.info(f"  Generating outreach messages...")
-                    try:
-                        self._generate_outreach_inline(
-                            lead_id=lead_id,
-                            lead_name=lead_name,
-                            lead_title=enriched_lead.get('title') or lead_title,
-                            company_name=company_name,
-                            lead_icp=enriched_lead.get('lead_icp', 50),
-                            company_icp=enriched_lead.get('company_icp', 50)
-                        )
+                else:
+                    logger.warning(f"  Lead enrichment returned None - will still generate outreach")
+                    enriched_lead = {'lead_icp': 50, 'company_icp': 50, 'title': lead_title}
+                
+                # GENERATE OUTREACH - always try if we have a lead_id
+                logger.info(f"  Generating outreach messages...")
+                try:
+                    outreach_result = self._generate_outreach_inline(
+                        lead_id=lead_id,
+                        lead_name=lead_name,
+                        lead_title=enriched_lead.get('title') or lead_title,
+                        company_name=company_name,
+                        lead_icp=enriched_lead.get('lead_icp', 50),
+                        company_icp=enriched_lead.get('company_icp', 50)
+                    )
+                    if outreach_result:
                         logger.info(f"  ✓ Outreach messages generated")
-                    except Exception as e:
-                        logger.warning(f"  Outreach generation failed: {e}")
+                    else:
+                        logger.warning(f"  Outreach generation returned None")
+                except Exception as e:
+                    logger.warning(f"  Outreach generation failed: {e}")
                         
             except Exception as e:
                 logger.warning(f"  Lead enrichment failed: {e}")
@@ -1952,11 +1958,23 @@ Return ONLY JSON."""
             if data.get('linkedin_inmail'):
                 outreach_update['LinkedIn InMail Body'] = data['linkedin_inmail']
             
-            if outreach_update:
+            logger.info(f"  Outreach fields to update: {list(outreach_update.keys())}")
+            
+            if outreach_update and len(outreach_update) > 1:  # More than just the date
                 try:
                     self.leads_table.update(lead_id, outreach_update)
+                    logger.info(f"  ✓ Outreach messages saved to lead record")
                 except Exception as e:
-                    logger.debug(f"Outreach update error: {e}")
+                    logger.error(f"  ✗ Outreach update failed: {e}")
+                    # Try fields one by one
+                    for field_name, field_value in outreach_update.items():
+                        try:
+                            self.leads_table.update(lead_id, {field_name: field_value})
+                            logger.debug(f"    ✓ Updated {field_name}")
+                        except Exception as field_error:
+                            logger.warning(f"    ✗ Failed to update {field_name}: {field_error}")
+            else:
+                logger.warning(f"  No outreach content generated")
             
             return data
             
