@@ -57,24 +57,30 @@ class OutreachValidator:
     
     # Outreach fields to validate in Leads table
     LEAD_OUTREACH_FIELDS = [
-        'General Outreach Email',
+        'Email Subject',
+        'Email Body',
         'LinkedIn Connection Request', 
         'LinkedIn Short Message',
-        'LinkedIn InMail'
+        'LinkedIn InMail Subject',
+        'LinkedIn InMail Body'
     ]
     
     # Outreach fields in Trigger History
     TRIGGER_OUTREACH_FIELDS = [
-        'Email Message',
-        'LinkedIn Message',
-        'InMail Message'
+        'Email Subject',
+        'Email Body',
+        'LinkedIn Connection Request',
+        'LinkedIn Short Message'
     ]
     
     # Outreach fields in Campaign Leads (if exists)
     CAMPAIGN_OUTREACH_FIELDS = [
-        'Campaign Email',
-        'Campaign LinkedIn Message',
-        'Campaign InMail'
+        'Email Subject',
+        'Email Body',
+        'LinkedIn Connection Request',
+        'LinkedIn Short Message',
+        'LinkedIn InMail Subject',
+        'LinkedIn InMail Body'
     ]
     
     def __init__(self, config_path: str = "config.yaml"):
@@ -133,20 +139,25 @@ class OutreachValidator:
     def get_leads_needing_validation(self, limit: int = None) -> List[Dict]:
         """Get leads with outreach messages that haven't been validated"""
         try:
-            # Get leads that have outreach but no validity rating
-            # OR validity rating is empty/null
-            formula = "AND(OR({General Outreach Email} != '', {LinkedIn InMail} != ''), OR({Outreach Validity Rating} = '', {Outreach Validity Rating} = BLANK()))"
+            # Get all leads and filter in Python (more reliable than complex formulas)
+            records = self.leads_table.all()
             
-            records = self.leads_table.all(formula=formula)
-            
-            # Filter to only those with actual outreach content
+            # Filter to those with outreach but no validity rating
             leads_with_outreach = []
             for record in records:
+                fields = record['fields']
+                
+                # Check if has any outreach content
                 has_outreach = any(
-                    record['fields'].get(field, '').strip() 
+                    fields.get(field, '').strip() 
                     for field in self.LEAD_OUTREACH_FIELDS
                 )
-                if has_outreach:
+                
+                # Check if not yet validated
+                validity_rating = fields.get('Outreach Validity Rating', '')
+                not_validated = not validity_rating or validity_rating.strip() == ''
+                
+                if has_outreach and not_validated:
                     leads_with_outreach.append(record)
             
             if limit:
@@ -162,19 +173,25 @@ class OutreachValidator:
     def get_triggers_needing_validation(self, limit: int = None) -> List[Dict]:
         """Get trigger history records with outreach that haven't been validated"""
         try:
-            # Get triggers with outreach but no validity rating
-            formula = "AND(OR({Email Message} != '', {LinkedIn Message} != '', {InMail Message} != ''), OR({Outreach Validity Rating} = '', {Outreach Validity Rating} = BLANK()))"
+            # Get all triggers and filter in Python
+            records = self.trigger_history_table.all()
             
-            records = self.trigger_history_table.all(formula=formula)
-            
-            # Filter to only those with actual outreach content
+            # Filter to those with outreach but no validity rating
             triggers_with_outreach = []
             for record in records:
+                fields = record['fields']
+                
+                # Check if has any outreach content
                 has_outreach = any(
-                    record['fields'].get(field, '').strip() 
+                    fields.get(field, '').strip() 
                     for field in self.TRIGGER_OUTREACH_FIELDS
                 )
-                if has_outreach:
+                
+                # Check if not yet validated
+                validity_rating = fields.get('Outreach Validity Rating', '')
+                not_validated = not validity_rating or validity_rating.strip() == ''
+                
+                if has_outreach and not_validated:
                     triggers_with_outreach.append(record)
             
             if limit:
@@ -193,24 +210,32 @@ class OutreachValidator:
             return []
         
         try:
-            formula = "AND(OR({Campaign Email} != '', {Campaign LinkedIn Message} != ''), OR({Outreach Validity Rating} = '', {Outreach Validity Rating} = BLANK()))"
+            # Get all campaign leads and filter in Python
+            records = self.campaign_leads_table.all()
             
-            records = self.campaign_leads_table.all(formula=formula)
-            
-            triggers_with_outreach = []
+            # Filter to those with outreach but no validity rating
+            leads_with_outreach = []
             for record in records:
+                fields = record['fields']
+                
+                # Check if has any outreach content
                 has_outreach = any(
-                    record['fields'].get(field, '').strip() 
+                    fields.get(field, '').strip() 
                     for field in self.CAMPAIGN_OUTREACH_FIELDS
                 )
-                if has_outreach:
-                    triggers_with_outreach.append(record)
+                
+                # Check if not yet validated
+                validity_rating = fields.get('Outreach Validity Rating', '')
+                not_validated = not validity_rating or validity_rating.strip() == ''
+                
+                if has_outreach and not_validated:
+                    leads_with_outreach.append(record)
             
             if limit:
-                triggers_with_outreach = triggers_with_outreach[:limit]
+                leads_with_outreach = leads_with_outreach[:limit]
             
-            logger.info(f"Found {len(triggers_with_outreach)} campaign leads needing validation")
-            return triggers_with_outreach
+            logger.info(f"Found {len(leads_with_outreach)} campaign leads needing validation")
+            return leads_with_outreach
             
         except Exception as e:
             logger.error(f"Error getting campaign leads for validation: {e}")
@@ -672,7 +697,8 @@ Return ONLY JSON, no other text."""
             
             for idx, campaign in enumerate(campaign_leads, 1):
                 lead_name = campaign['fields'].get('Name', 'Unknown')
-                logger.info(f"\n[{idx}/{len(campaign_leads)}] Campaign: {lead_name}")
+                company_name = campaign['fields'].get('Company', 'Unknown')
+                logger.info(f"\n[{idx}/{len(campaign_leads)}] Campaign: {lead_name} ({company_name})")
                 
                 try:
                     messages = {
@@ -680,18 +706,30 @@ Return ONLY JSON, no other text."""
                         for field in self.CAMPAIGN_OUTREACH_FIELDS
                     }
                     
-                    # Build simple context
+                    # Build context from campaign lead fields
                     context = {
                         'lead_name': campaign['fields'].get('Name', ''),
                         'lead_title': campaign['fields'].get('Title', ''),
+                        'lead_email': campaign['fields'].get('Email', ''),
+                        'lead_linkedin': campaign['fields'].get('LinkedIn URL', ''),
                         'company_name': campaign['fields'].get('Company', ''),
-                        'company_data': {}
+                        'company_data': {
+                            'location': campaign['fields'].get('Location', ''),
+                            'funding': campaign['fields'].get('Funding', ''),
+                            'pipeline_stage': campaign['fields'].get('Pipeline Stage', ''),
+                            'therapeutic_areas': campaign['fields'].get('Therapeutic Areas', ''),
+                            'intelligence_notes': campaign['fields'].get('Notes', '')
+                        }
                     }
                     
                     validation = self.validate_outreach_messages(messages, context)
                     self.update_campaign_lead_validation(campaign['id'], validation)
                     
+                    # Track stats
                     stats['campaign_processed'] += 1
+                    rating = validation.get('validity_rating', 'LOW')
+                    stats[f'campaign_{rating.lower()}'] = stats.get(f'campaign_{rating.lower()}', 0) + 1
+                    
                     time.sleep(1)
                     
                 except Exception as e:
@@ -714,6 +752,10 @@ Return ONLY JSON, no other text."""
         logger.info(f"  - CRITICAL: {stats['triggers_critical']}")
         if self.campaign_leads_table:
             logger.info(f"Campaign leads validated: {stats['campaign_processed']}")
+            logger.info(f"  - HIGH: {stats.get('campaign_high', 0)}")
+            logger.info(f"  - MEDIUM: {stats.get('campaign_medium', 0)}")
+            logger.info(f"  - LOW: {stats.get('campaign_low', 0)}")
+            logger.info(f"  - CRITICAL: {stats.get('campaign_critical', 0)}")
         logger.info(f"Errors: {stats['errors']}")
         logger.info("="*70)
         
