@@ -1,54 +1,25 @@
 name: Conference Intelligence Monitoring
 
 on:
-  # Run every 2 weeks (1st and 15th of each month)
+  # Run bi-weekly (1st and 15th of each month)
   schedule:
     - cron: '0 8 1,15 * *'  # 8 AM UTC on 1st and 15th
   
   # Manual trigger
   workflow_dispatch:
-    inputs:
-      force_run:
-        description: 'Force run even if disabled in config'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-
-# Set this to false to disable scheduled runs
-env:
-  CONFERENCE_INTELLIGENCE_ENABLED: 'false'  # Change to 'true' to enable
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Check if enabled
-      run: |
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.force_run }}" == "true" ]; then
-          echo "Force run requested - continuing..."
-        elif [ "$CONFERENCE_INTELLIGENCE_ENABLED" != "true" ]; then
-          echo "============================================================"
-          echo "CONFERENCE INTELLIGENCE IS DISABLED"
-          echo "============================================================"
-          echo "To enable:"
-          echo "1. Edit .github/workflows/conference_monitoring.yml"
-          echo "2. Change CONFERENCE_INTELLIGENCE_ENABLED to 'true'"
-          echo "3. Or use 'Run workflow' button with force_run=true"
-          echo "============================================================"
-          exit 0
-        fi
-    
     - name: Checkout code
       uses: actions/checkout@v4
     
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -77,13 +48,16 @@ jobs:
         AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       run: |
-        echo "Starting Conference Intelligence monitoring..."
+        echo "============================================================"
+        echo "CONFERENCE INTELLIGENCE - BI-WEEKLY MONITORING"
+        echo "Forward-looking: Finds upcoming conferences and speaker lists"
+        echo "============================================================"
         python conference_intelligence.py
     
     - name: Upload log
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: conference-intelligence-log
+        name: conference-intelligence-log-${{ github.run_id }}
         path: conference_intelligence.log
         retention-days: 90
