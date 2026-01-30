@@ -297,6 +297,7 @@ class OutreachValidator:
             'sources': fields.get('Sources', ''),
             'lead_name': '',
             'lead_title': '',
+            'lead_linkedin': '',
             'company_name': '',
             'company_data': {}
         }
@@ -309,6 +310,7 @@ class OutreachValidator:
                 lead_fields = lead_record['fields']
                 context['lead_name'] = lead_fields.get('Lead Name', '')
                 context['lead_title'] = lead_fields.get('Title', '')
+                context['lead_linkedin'] = lead_fields.get('LinkedIn URL', '')
                 
                 # Get company from lead
                 company_ids = lead_fields.get('Company', [])
@@ -368,12 +370,13 @@ class OutreachValidator:
         
         # Build context string
         context_str = f"""
-LEAD INFORMATION:
+LEAD INFORMATION (already verified - do NOT re-check):
 - Name: {context.get('lead_name', 'Unknown')}
 - Title: {context.get('lead_title', 'Unknown')}
 - Company: {context.get('company_name', 'Unknown')}
+- LinkedIn: {context.get('lead_linkedin', 'Not provided')}
 
-COMPANY INFORMATION:
+COMPANY INFORMATION (from our database):
 - Location: {context.get('company_data', {}).get('location', 'Unknown')}
 - Latest Funding: {context.get('company_data', {}).get('funding', 'Unknown')}
 - Pipeline Stage: {context.get('company_data', {}).get('pipeline_stage', 'Unknown')}
@@ -392,52 +395,55 @@ TRIGGER INFORMATION:
 - Sources: {context.get('sources', '')}
 """
         
-        validation_prompt = f"""You are a quality assurance specialist reviewing B2B outreach messages for a biologics CDMO (Contract Development and Manufacturing Organization).
+        validation_prompt = f"""You are a quality assurance specialist reviewing B2B outreach messages for a biologics CDMO.
 
-CONTEXT (from our database):
+CONTEXT (from our database - this info is already verified):
 {context_str}
 
 OUTREACH MESSAGES TO VALIDATE:
 {all_messages}
 
-VALIDATION TASKS:
-1. **Verify Lead Information**: Is the person's name, title, and company association accurate?
-2. **Verify Company Information**: Check if mentioned company details (funding, pipeline, partnerships, etc.) are current and accurate
-3. **Check Claims & Statements**: Are any specific claims made about the company or industry accurate?
-4. **Detect Outdated Information**: Has anything changed recently that makes the message outdated?
-5. **Check for Hallucinations**: Are there any statements that seem fabricated or unverifiable?
-6. **Tone & Appropriateness**: Is the message appropriate for the recipient's seniority and industry?
+IMPORTANT: The lead's name, title, and company association are ALREADY VERIFIED in our database. Do NOT mark these as issues unless the outreach message contains DIFFERENT information than what's in our database above.
 
-SEARCH AND VERIFY:
-- Search for recent news about the company and lead
-- Verify any specific claims (funding amounts, pipeline stages, partnerships)
-- Check if the lead is still at the company with the stated title
-- Look for any recent developments that should be mentioned or that contradict the message
+VALIDATION TASKS - Focus on the MESSAGE CONTENT:
+1. **Check Specific Claims in Messages**: Are any specific claims made in the messages (funding amounts, pipeline stages, partnerships, recent news) accurate and current?
+2. **Detect Outdated Information**: Has anything changed recently that makes claims IN THE MESSAGE outdated?
+3. **Check for Hallucinations**: Are there statements in the message that seem fabricated or unverifiable?
+4. **Tone & Appropriateness**: Is the message appropriate for the recipient's seniority and industry?
+5. **Factual Accuracy**: If the message mentions specific facts (e.g., "$50M Series B", "Phase 2 trial", "recent partnership with X"), verify these are correct.
+
+DO NOT flag as issues:
+- Lead name/title/company (already verified)
+- General statements that don't make specific claims
+- Standard CDMO value propositions
+
+ONLY flag as issues:
+- Specific factual claims in the message that are wrong or outdated
+- Recent developments that contradict the message
+- Inappropriate tone or content
 
 RATING SCALE:
-- HIGH (90-100): All information verified accurate, safe to send as-is
-- MEDIUM (70-89): Minor uncertainties but generally accurate, quick review recommended
-- LOW (50-69): Significant uncertainties or potential issues, manual review required
-- CRITICAL (0-49): Major factual errors or outdated information, do not send without revision
+- HIGH (90-100): Message content is accurate, safe to send as-is
+- MEDIUM (70-89): Minor uncertainties in specific claims, quick review recommended
+- LOW (50-69): Specific claims appear incorrect or outdated, manual review required
+- CRITICAL (0-49): Major factual errors in the message, do not send without revision
 
 Return ONLY valid JSON:
 {{
     "validity_score": 85,
     "validity_rating": "HIGH|MEDIUM|LOW|CRITICAL",
     "issues_found": [
-        "Specific issue 1",
-        "Specific issue 2"
+        "Specific issue with message content"
     ],
     "verified_facts": [
-        "Fact 1 confirmed",
-        "Fact 2 confirmed"
+        "Specific claim in message confirmed accurate"
     ],
     "uncertain_claims": [
-        "Claim that could not be verified"
+        "Specific claim that could not be verified"
     ],
-    "verification_notes": "Summary of verification process and findings",
-    "recommendation": "Specific action recommendation for the sales team",
-    "suggested_edits": "Any specific edits suggested (or null if none needed)"
+    "verification_notes": "Summary of what was checked in the message",
+    "recommendation": "Specific action for the sales team",
+    "suggested_edits": "Any specific edits to the message (or null if none needed)"
 }}
 
 Return ONLY JSON, no other text."""
