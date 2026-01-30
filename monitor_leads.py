@@ -807,19 +807,40 @@ Return ONLY JSON, no other text."""
                 if hasattr(block, 'text'):
                     response_text += block.text
             
+            if not response_text.strip():
+                logger.warning(f"    Empty response from API")
+                return None
+            
+            # Try to extract JSON
+            json_str = None
             if "```json" in response_text:
                 json_str = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text and "{" in response_text:
+                # Handle ```\n{...}\n```
+                json_str = response_text.split("```")[1].split("```")[0]
             elif "{" in response_text:
                 start = response_text.find("{")
                 end = response_text.rfind("}") + 1
                 json_str = response_text[start:end]
-            else:
+            
+            if not json_str:
+                logger.warning(f"    No JSON found in response")
+                logger.debug(f"    Response: {response_text[:300]}")
                 return None
             
-            return json.loads(json_str.strip())
+            # Clean up common issues
+            json_str = json_str.strip()
+            # Remove trailing commas before } or ]
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
             
+            return json.loads(json_str)
+            
+        except json.JSONDecodeError as je:
+            logger.warning(f"    JSON parse error in trigger outreach: {je}")
+            logger.debug(f"    Response was: {response_text[:500] if response_text else 'empty'}")
+            return None
         except Exception as e:
-            logger.debug(f"Error generating trigger outreach: {e}")
+            logger.warning(f"    Error generating trigger outreach: {e}")
             return None
     
     def log_trigger_to_history(self, lead_record_id: str, lead_name: str, 
