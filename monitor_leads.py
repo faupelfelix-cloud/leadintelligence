@@ -55,7 +55,22 @@ class LeadSurveillance:
             api_key=self.config['anthropic']['api_key']
         )
         
+        # Load company profile for outreach context
+        self.company_profile = self._load_company_profile()
+        
         logger.info("LeadSurveillance initialized successfully")
+    
+    def _load_company_profile(self) -> Dict:
+        """Load company profile from Airtable for outreach context"""
+        try:
+            table = self.base.table('Company Profile')
+            records = table.all()
+            if records:
+                logger.info("Company Profile loaded for outreach context")
+                return records[0]['fields']
+        except Exception as e:
+            logger.warning(f"Could not load Company Profile: {e}")
+        return {}
     
     def get_our_conferences(self) -> str:
         """Get list of conferences we're attending for matching"""
@@ -691,9 +706,125 @@ Only return valid JSON, no other text."""
         
         return '\n'.join(output)
     
+    def _generate_trigger_outreach(self, lead_record_id: str, lead_name: str,
+                                   trigger_event: Dict, company_name: str = "") -> Optional[Dict]:
+        """Generate trigger-specific outreach messages matching enrich flow tone/style"""
+        
+        trigger_type = trigger_event.get('type', 'OTHER')
+        description = trigger_event.get('description', '')
+        outreach_angle = trigger_event.get('outreach_angle', '')
+        
+        # Get lead info
+        lead_title = ""
+        try:
+            lead_record = self.leads_table.get(lead_record_id)
+            lead_title = lead_record['fields'].get('Title', '')
+            if not company_name:
+                company_ids = lead_record['fields'].get('Company', [])
+                if company_ids:
+                    company_record = self.companies_table.get(company_ids[0])
+                    company_name = company_record['fields'].get('Company Name', '')
+        except:
+            pass
+        
+        # Get company profile for consistent messaging
+        our_company = "European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs)"
+        our_strengths = "Mammalian cell culture, mAbs, bispecifics, ADCs"
+        our_target = "Mid-size biotech companies"
+        
+        if self.company_profile:
+            our_company = self.company_profile.get('Capabilities', our_company)
+            our_strengths = self.company_profile.get('Strengths', our_strengths)
+            our_target = self.company_profile.get('Market Positioning', our_target)
+        
+        prompt = f"""Generate trigger-specific outreach messages based on this intelligence.
+
+TRIGGER EVENT:
+Type: {trigger_type}
+Description: {description}
+Suggested Angle: {outreach_angle}
+
+LEAD:
+Name: {lead_name}
+Title: {lead_title}
+Company: {company_name}
+
+YOUR COMPANY:
+{our_company}
+- European CDMO with Sandoz-qualified facilities
+- Strengths: {our_strengths}
+- Target: {our_target}
+- Focus: Mid-size biotechs in Phase 2/3 or commercial
+- Value prop: Cost-efficient European quality, agile partner
+
+TONE & STYLE GUIDELINES:
+- Conversational and warm, NOT salesy
+- Reference the trigger naturally (not "I saw that..." or "Congratulations on...")
+- Focus on THEIR perspective, not your pitch
+- Soft CTAs (coffee chat, brief call, "would love to hear more")
+- NO bullet points in emails
+- Professional but personable
+- Sign emails: "Best regards, [Your Name], Business Development"
+
+Generate 3 messages:
+
+1. EMAIL (120-150 words):
+Subject: [Natural subject referencing the trigger - NOT "Congratulations on..."]
+- Conversational opener referencing the trigger/news naturally
+- Why you might be relevant to THEM (weave it in, no bullet lists)
+- Soft CTA
+- Sign: "Best regards, [Your Name], Business Development"
+
+2. LINKEDIN CONNECTION REQUEST (180-200 chars):
+- Brief, friendly, reference the trigger or their role
+- Why you'd like to connect
+
+3. LINKEDIN SHORT MESSAGE (300-400 chars):
+- For after connection accepted
+- Reference the trigger conversationally
+- Brief mention of relevance
+- End: "Best regards, [Your Name]"
+
+Return ONLY valid JSON:
+{{
+    "email_subject": "Subject line",
+    "email_body": "Full email body",
+    "linkedin_connection": "Connection request text",
+    "linkedin_short": "Short message text"
+}}
+
+Return ONLY JSON, no other text."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            return json.loads(json_str.strip())
+            
+        except Exception as e:
+            logger.debug(f"Error generating trigger outreach: {e}")
+            return None
+    
     def log_trigger_to_history(self, lead_record_id: str, lead_name: str, 
                                company_record_id: str, trigger_event: Dict, 
-                               sources: list = None):
+                               sources: list = None, company_name: str = ""):
         """Log a trigger event to the Trigger History table for permanent record"""
         
         try:
@@ -719,6 +850,34 @@ Only return valid JSON, no other text."""
                 history_record['Sources'] = sources_text
             elif trigger_event.get('source'):
                 history_record['Sources'] = trigger_event.get('source')
+            elif trigger_event.get('sources'):
+                sources_list = trigger_event.get('sources', [])
+                if sources_list:
+                    sources_text = '\n'.join([f"• {s}" for s in sources_list[:5]])
+                    history_record['Sources'] = sources_text
+            
+            # Generate outreach messages for this trigger
+            logger.info(f"    Generating trigger outreach messages...")
+            outreach = self._generate_trigger_outreach(
+                lead_record_id=lead_record_id,
+                lead_name=lead_name,
+                trigger_event=trigger_event,
+                company_name=company_name
+            )
+            
+            if outreach:
+                if outreach.get('email_subject'):
+                    history_record['Email Subject'] = outreach['email_subject']
+                if outreach.get('email_body'):
+                    history_record['Email Body'] = outreach['email_body']
+                if outreach.get('linkedin_connection'):
+                    history_record['LinkedIn Connection Request'] = outreach['linkedin_connection']
+                if outreach.get('linkedin_short'):
+                    history_record['LinkedIn Short Message'] = outreach['linkedin_short']
+                history_record['Outreach Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                logger.info(f"    ✓ Outreach messages generated")
+            else:
+                logger.warning(f"    ⚠ Could not generate outreach messages")
             
             self.trigger_history_table.create(history_record)
             logger.info(f"    ✓ Logged to Trigger History")
@@ -803,9 +962,17 @@ Only return valid JSON, no other text."""
             
             # Log each trigger to history table for permanent record
             lead_name = ""
+            company_name = ""
             try:
                 lead_record = self.leads_table.get(lead_record_id)
                 lead_name = lead_record['fields'].get('Lead Name', 'Unknown')
+                # Get company name
+                if company_record_id:
+                    try:
+                        company_record = self.companies_table.get(company_record_id)
+                        company_name = company_record['fields'].get('Company Name', '')
+                    except:
+                        pass
             except:
                 pass
             
@@ -821,7 +988,8 @@ Only return valid JSON, no other text."""
                     lead_name=lead_name,
                     company_record_id=company_record_id,
                     trigger_event=trigger_event,
-                    sources=trigger_sources
+                    sources=trigger_sources,
+                    company_name=company_name
                 )
         else:
             # Clear trigger fields if no events
