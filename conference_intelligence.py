@@ -955,27 +955,14 @@ Search and assess now."""
     def run(self):
         """Main monitoring workflow"""
         logger.info("Starting Conference Intelligence monitoring...")
-        
-        # Check if feature is enabled
-        features = self.config.get('features', {})
-        conf_intel = features.get('conference_intelligence', {})
-        
-        if not conf_intel.get('enabled', True):  # Default to True for backwards compatibility
-            logger.info("="*60)
-            logger.info("CONFERENCE INTELLIGENCE IS DISABLED")
-            logger.info("="*60)
-            logger.info("To enable, set in config.yaml:")
-            logger.info("  features:")
-            logger.info("    conference_intelligence:")
-            logger.info("      enabled: true")
-            logger.info("="*60)
-            return
+        logger.info("="*60)
         
         # Get conferences to monitor
         conferences = self.get_conferences_to_monitor()
         
         if not conferences:
             logger.info("No conferences to monitor at this time")
+            logger.info("(All conferences are either too far out, already happened, or were recently monitored)")
             return
         
         logger.info(f"Found {len(conferences)} conference(s) to monitor\n")
