@@ -1,11 +1,16 @@
 name: Auto-Link Leads to Companies
 
 on:
+  schedule:
+    # Weekly on Sunday at 6 AM UTC (before Monday's monitoring)
+    - cron: '0 6 * * 0'
+  
   workflow_dispatch:
     inputs:
       mode:
         description: 'Linking mode'
-        required: true
+        required: false
+        default: 'Link and create companies (recommended)'
         type: choice
         options:
           - 'Link and create companies (recommended)'
@@ -23,7 +28,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -42,7 +47,7 @@ jobs:
         AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
         AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
       run: |
-        MODE="${{ github.event.inputs.mode }}"
+        MODE="${{ github.event.inputs.mode || 'Link and create companies (recommended)' }}"
         
         if [[ "$MODE" == "Link and create companies (recommended)" ]]; then
           echo "Linking leads and creating new companies as needed..."
@@ -59,6 +64,6 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: auto-link-log
+        name: auto-link-log-${{ github.run_id }}
         path: auto_link.log
         retention-days: 30
