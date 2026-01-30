@@ -1669,18 +1669,31 @@ Return ONLY JSON."""
                 data.get('title') or lead_title, company_icp
             )
             
-            # Determine Lead ICP Tier
-            if lead_icp >= 80:
-                lead_icp_tier = "Tier 1 - High Priority"
-            elif lead_icp >= 60:
-                lead_icp_tier = "Tier 2 - Medium Priority"
+            # Determine Lead ICP Tier - MUST match exact Airtable options
+            if lead_icp >= 85:
+                lead_icp_tier = "Perfect Fit (Tier 1)"
+            elif lead_icp >= 70:
+                lead_icp_tier = "Strong Fit (Tier 2)"
+            elif lead_icp >= 55:
+                lead_icp_tier = "Good Fit (Tier 3)"
             elif lead_icp >= 40:
-                lead_icp_tier = "Tier 3 - Low Priority"
+                lead_icp_tier = "Acceptable Fit (Tier 4)"
             else:
-                lead_icp_tier = "Tier 4 - Monitor"
+                lead_icp_tier = "Poor Fit (Tier 5)"
             
-            # Calculate Combined Priority (average of lead ICP and company ICP)
-            combined_priority = int((lead_icp + company_icp) / 2)
+            # Calculate Combined Priority - returns a STRING, not a number
+            combined_priority = self._calculate_combined_priority(company_icp, lead_icp)
+            
+            # Map email confidence to valid options (High, Medium, Low only)
+            email_conf = data.get('email_confidence', 'Medium')
+            confidence_map = {
+                'high': 'High',
+                'medium': 'Medium',
+                'low': 'Low',
+                'pattern suggested': 'Low',  # Map to valid option
+                'pattern': 'Low'
+            }
+            enrichment_confidence = confidence_map.get(email_conf.lower(), 'Medium')
             
             # Update lead record with all fields
             update_fields = {
@@ -1693,7 +1706,7 @@ Return ONLY JSON."""
             update_fields['Lead ICP Tier'] = lead_icp_tier
             update_fields['Lead ICP Justification'] = lead_icp_justification
             update_fields['Combined Priority'] = combined_priority
-            update_fields['Enrichment Confidence'] = data.get('email_confidence', 'Medium')
+            update_fields['Enrichment Confidence'] = enrichment_confidence
             
             if data.get('email'):
                 update_fields['Email'] = data['email']
@@ -1701,8 +1714,7 @@ Return ONLY JSON."""
                 update_fields['Title'] = data['title']
             if data.get('linkedin_url'):
                 update_fields['LinkedIn URL'] = data['linkedin_url']
-            if data.get('location'):
-                update_fields['Location'] = data['location']
+            # Note: Location field doesn't exist in Leads table - skip it
             if data.get('recent_activity'):
                 update_fields['Intelligence Notes'] = data['recent_activity'][:1000]
             
@@ -1777,6 +1789,26 @@ Return ONLY JSON."""
         justification = f"Title score: {title_score}/100 ({title_reason}). Company ICP: {company_icp}/90. Combined (60% title + 40% company): {combined}/100"
         
         return combined, justification
+    
+    def _calculate_combined_priority(self, company_icp: int, lead_icp: int) -> str:
+        """Calculate combined priority based on company and lead ICP scores - returns STRING"""
+        # Company tiers: 80+ (T1), 65+ (T2), 50+ (T3), 35+ (T4)
+        # Lead tiers: 85+ (T1), 70+ (T2), 55+ (T3), 40+ (T4)
+        
+        if company_icp >= 80 and lead_icp >= 70:
+            return "🔥 HOT - Priority 1"
+        elif company_icp >= 80 and lead_icp >= 55:
+            return "📈 WARM - Priority 2"
+        elif company_icp >= 65 and lead_icp >= 70:
+            return "📈 WARM - Priority 2"
+        elif company_icp >= 65 and lead_icp >= 55:
+            return "➡️ MEDIUM - Priority 3"
+        elif company_icp >= 50 and lead_icp >= 40:
+            return "➡️ MEDIUM - Priority 3"
+        elif company_icp >= 35 and lead_icp >= 40:
+            return "⬇️ LOW - Priority 4"
+        else:
+            return "❌ SKIP - Priority 5"
     
     def _calculate_lead_icp(self, title: str, company_icp: int) -> int:
         """Calculate lead ICP score based on title and company ICP"""
