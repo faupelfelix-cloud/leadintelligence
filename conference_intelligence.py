@@ -15,6 +15,16 @@ from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
 
+# Import fuzzy matching utilities
+try:
+    from fuzzy_match import normalize_company_name, normalize_lead_name, similarity_score
+    HAS_FUZZY_MATCH = True
+except ImportError:
+    HAS_FUZZY_MATCH = False
+    normalize_company_name = lambda x: x.lower().strip() if x else ""
+    normalize_lead_name = lambda x: x.lower().strip() if x else ""
+    similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -554,14 +564,38 @@ Search and assess now."""
             return 0
     
     def find_company(self, company_name: str) -> Optional[Dict]:
-        """Find company in Companies table"""
+        """Find company in Companies table with fuzzy matching"""
         try:
-            # Search by company name
-            formula = f"{{Company Name}} = '{company_name}'"
+            # First try exact match
+            safe_name = company_name.replace("'", "\\'")
+            formula = f"{{Company Name}} = '{safe_name}'"
             records = self.companies_table.all(formula=formula)
             
             if records:
                 return records[0]
+            
+            # Try fuzzy match if enabled
+            if HAS_FUZZY_MATCH:
+                all_companies = self.companies_table.all()
+                norm_query = normalize_company_name(company_name)
+                
+                best_match = None
+                best_score = 0.0
+                
+                for record in all_companies:
+                    existing_name = record['fields'].get('Company Name', '')
+                    score = similarity_score(company_name, existing_name, normalize_company_name)
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_match = record
+                
+                # If good fuzzy match (>= 85%)
+                if best_score >= 0.85 and best_match:
+                    matched_name = best_match['fields'].get('Company Name', '')
+                    logger.info(f"    Fuzzy matched company '{company_name}' -> '{matched_name}' (score: {best_score:.2f})")
+                    return best_match
+            
             return None
         except:
             return None
@@ -583,10 +617,11 @@ Search and assess now."""
             return None
     
     def find_lead(self, name: str, company_name: str) -> Optional[Dict]:
-        """Find lead in Leads table"""
+        """Find lead in Leads table with fuzzy matching"""
         try:
-            # Search by name
-            formula = f"{{Lead Name}} = '{name}'"
+            # First try exact name match
+            safe_name = name.replace("'", "\\'")
+            formula = f"{{Lead Name}} = '{safe_name}'"
             records = self.leads_table.all(formula=formula)
             
             # Check if company matches
@@ -594,6 +629,39 @@ Search and assess now."""
                 company_field = record['fields'].get('Company Name')
                 if company_field and company_name.lower() in company_field.lower():
                     return record
+            
+            # If exact name matches found but different company, still return first match
+            if records:
+                return records[0]
+            
+            # Try fuzzy match if enabled
+            if HAS_FUZZY_MATCH:
+                all_leads = self.leads_table.all()
+                norm_query = normalize_lead_name(name)
+                
+                best_match = None
+                best_score = 0.0
+                
+                for record in all_leads:
+                    existing_name = record['fields'].get('Lead Name', '')
+                    score = similarity_score(name, existing_name, normalize_lead_name)
+                    
+                    # Boost score if company also matches
+                    company_field = record['fields'].get('Company Name', '')
+                    if company_field and company_name:
+                        company_score = similarity_score(company_name, company_field, normalize_company_name)
+                        if company_score >= 0.85:
+                            score = min(score + 0.1, 1.0)  # Boost for company match
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_match = record
+                
+                # If good fuzzy match (>= 85%)
+                if best_score >= 0.85 and best_match:
+                    matched_name = best_match['fields'].get('Lead Name', '')
+                    logger.info(f"    Fuzzy matched lead '{name}' -> '{matched_name}' (score: {best_score:.2f})")
+                    return best_match
             
             return None
         except:
