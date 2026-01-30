@@ -5,13 +5,11 @@ Market News Intelligence System - Integrated with Lead Intelligence Platform
 This system:
 1. Collects news from configurable sources (RSS feeds, NewsAPI, ClinicalTrials.gov)
 2. Analyzes against ICP criteria and existing company list
-3. Discovers new companies and ENRICHES them immediately
-4. Finds REAL leads (not placeholders), ENRICHES them, generates OUTREACH
+3. Discovers new companies and ENRICHES them immediately (inline)
+4. Finds REAL leads (not placeholders), ENRICHES them (inline), generates OUTREACH
 5. Creates NEWS trigger events with full context
 
-Integrates with existing enrichment flows:
-- CompanyEnricher from enrich_companies.py
-- LeadEnricher from enrich_leads.py (includes outreach generation)
+All enrichment is done INLINE within this script - no external dependencies.
 
 New tables:
 - News Sources (configurable sources)
@@ -38,15 +36,16 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 
-# Import existing enrichment classes
+# Import fuzzy matching utilities
 try:
-    from enrich_companies import CompanyEnricher
-    from enrich_leads import LeadEnricher
-    HAS_ENRICHERS = True
+    from fuzzy_match import FuzzyMatcher, normalize_company_name, normalize_lead_name, similarity_score
+    HAS_FUZZY_MATCH = True
 except ImportError:
-    HAS_ENRICHERS = False
-    CompanyEnricher = None
-    LeadEnricher = None
+    HAS_FUZZY_MATCH = False
+    FuzzyMatcher = None
+    normalize_company_name = lambda x: x.lower().strip() if x else ""
+    normalize_lead_name = lambda x: x.lower().strip() if x else ""
+    similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
 
 # Configure logging
 logging.basicConfig(
@@ -354,24 +353,20 @@ class MarketNewsIntelligence:
         # NewsAPI key (optional)
         self.news_api_key = os.getenv('NEWS_API_KEY', self.config.get('news_api', {}).get('api_key'))
         
-        # Initialize existing enrichers for integrated flow
-        self.company_enricher = None
-        self.lead_enricher = None
-        
-        if HAS_ENRICHERS:
+        # Initialize fuzzy matcher for duplicate detection
+        self.fuzzy_matcher = None
+        if HAS_FUZZY_MATCH:
             try:
-                self.company_enricher = CompanyEnricher(config_path)
-                logger.info("✓ CompanyEnricher initialized")
+                self.fuzzy_matcher = FuzzyMatcher(
+                    self.base,
+                    company_table_name=self.config['airtable']['tables']['companies'],
+                    leads_table_name=self.config['airtable']['tables']['leads'],
+                    company_threshold=0.85,
+                    lead_threshold=0.85
+                )
+                logger.info("✓ Fuzzy matching enabled")
             except Exception as e:
-                logger.warning(f"Could not initialize CompanyEnricher: {e}")
-            
-            try:
-                self.lead_enricher = LeadEnricher(config_path)
-                logger.info("✓ LeadEnricher initialized")
-            except Exception as e:
-                logger.warning(f"Could not initialize LeadEnricher: {e}")
-        else:
-            logger.warning("Enrichers not available - install enrich_companies.py and enrich_leads.py")
+                logger.warning(f"Could not initialize FuzzyMatcher: {e}")
         
         # Load context data
         self.trigger_points = self._load_trigger_points()
@@ -382,8 +377,7 @@ class MarketNewsIntelligence:
         logger.info(f"  - {len(self.trigger_points)} trigger points loaded")
         logger.info(f"  - {len(self.competitors)} competitors tracked")
         logger.info(f"  - {len(self.high_icp_companies)} high-ICP companies to monitor")
-        logger.info(f"  - Company enrichment: {'ENABLED' if self.company_enricher else 'DISABLED'}")
-        logger.info(f"  - Lead enrichment: {'ENABLED' if self.lead_enricher else 'DISABLED'}")
+        logger.info(f"  - Inline enrichment: ENABLED")
     
     def _init_table(self, table_name: str):
         """Initialize table, return None if not found"""
@@ -1058,22 +1052,38 @@ Return ONLY JSON."""
             logger.info(f"  Skipping competitor: {company_name}")
             return None
         
-        # Check if exists
+        # Check if exists using fuzzy matching
         company_id = None
         is_new = False
         
         try:
-            safe_name = company_name.replace("'", "\\'")
-            matches = self.companies_table.all(
-                formula=f"LOWER({{Company Name}}) = LOWER('{safe_name}')"
-            )
-            
-            if matches:
-                company_record = matches[0]
-                company_id = company_record['id']
-                icp_score = company_record['fields'].get('ICP Fit Score', 'N/A')
-                logger.info(f"  Found existing company: {company_name} (ICP: {icp_score})")
-                return (company_id, False)
+            if self.fuzzy_matcher:
+                # Use fuzzy matching
+                match_result = self.fuzzy_matcher.find_company(company_name)
+                if match_result:
+                    company_id = match_result['id']
+                    matched_name = match_result['name']
+                    match_score = match_result.get('match_score', 1.0)
+                    icp_score = match_result['fields'].get('ICP Fit Score', 'N/A')
+                    
+                    if match_score < 1.0:
+                        logger.info(f"  Fuzzy matched '{company_name}' -> '{matched_name}' (score: {match_score:.2f}, ICP: {icp_score})")
+                    else:
+                        logger.info(f"  Found existing company: {matched_name} (ICP: {icp_score})")
+                    return (company_id, False)
+            else:
+                # Fallback to exact match (case-insensitive)
+                safe_name = company_name.replace("'", "\\'")
+                matches = self.companies_table.all(
+                    formula=f"LOWER({{Company Name}}) = LOWER('{safe_name}')"
+                )
+                
+                if matches:
+                    company_record = matches[0]
+                    company_id = company_record['id']
+                    icp_score = company_record['fields'].get('ICP Fit Score', 'N/A')
+                    logger.info(f"  Found existing company: {company_name} (ICP: {icp_score})")
+                    return (company_id, False)
             
         except Exception as e:
             logger.debug(f"Company lookup error: {e}")
@@ -1097,23 +1107,14 @@ Return ONLY JSON."""
             company_id = new_company['id']
             is_new = True
             
-            # ENRICH IMMEDIATELY using existing CompanyEnricher
-            if self.company_enricher:
-                logger.info(f"  Enriching company: {company_name}...")
-                try:
-                    # Use the full enrich flow - search and update
-                    enriched_data = self.company_enricher.search_company_info(company_name)
-                    
-                    if enriched_data and isinstance(enriched_data, dict):
-                        # Update the record using CompanyEnricher's method
-                        self.company_enricher.update_company_record(company_id, enriched_data)
-                        icp_score = enriched_data.get('icp_fit_score', 'N/A')
-                        logger.info(f"  ✓ Company enriched - ICP Score: {icp_score}")
-                    else:
-                        logger.warning(f"  Company enrichment returned no data")
-                        
-                except Exception as e:
-                    logger.warning(f"  Company enrichment failed: {e}")
+            # ENRICH IMMEDIATELY - inline enrichment (don't rely on external enricher config)
+            logger.info(f"  Enriching company: {company_name}...")
+            try:
+                enriched_data = self._enrich_company_inline(company_id, company_name)
+                if enriched_data:
+                    logger.info(f"  ✓ Company enriched - ICP Score: {enriched_data.get('icp_score', 'N/A')}")
+            except Exception as e:
+                logger.warning(f"  Company enrichment failed: {e}")
             
             return (company_id, True)
             
@@ -1124,10 +1125,11 @@ Return ONLY JSON."""
     def find_existing_lead(self, company_id: str, company_name: str) -> Optional[Tuple[str, Dict]]:
         """
         Find existing lead at company with good ICP score.
+        Uses fuzzy matching to find leads with similar names.
         Returns (lead_id, lead_fields) or None
         """
         try:
-            # Use formula to find leads linked to this company
+            # Get all leads at this company
             leads = self.leads_table.all(formula=f"FIND('{company_id}', ARRAYJOIN({{Company}}))")
             
             if leads:
@@ -1144,6 +1146,43 @@ Return ONLY JSON."""
             
         except Exception as e:
             logger.debug(f"Lead lookup error: {e}")
+        
+        return None
+    
+    def _lead_exists_fuzzy(self, lead_name: str, company_id: str) -> Optional[Tuple[str, Dict]]:
+        """
+        Check if a lead with similar name exists at company using fuzzy matching.
+        Returns (lead_id, lead_fields) or None
+        """
+        if self.fuzzy_matcher:
+            match_result = self.fuzzy_matcher.find_lead(lead_name, company_id)
+            if match_result:
+                match_score = match_result.get('match_score', 1.0)
+                matched_name = match_result['name']
+                if match_score < 1.0:
+                    logger.info(f"  Fuzzy matched lead '{lead_name}' -> '{matched_name}' (score: {match_score:.2f})")
+                return (match_result['id'], match_result['fields'])
+        else:
+            # Fallback: check by normalized name
+            try:
+                leads = self.leads_table.all(formula=f"FIND('{company_id}', ARRAYJOIN({{Company}}))")
+                norm_query = normalize_lead_name(lead_name)
+                
+                for lead in leads:
+                    existing_name = lead['fields'].get('Lead Name', '')
+                    norm_existing = normalize_lead_name(existing_name)
+                    
+                    if norm_query == norm_existing:
+                        logger.info(f"  Found existing lead (normalized match): {existing_name}")
+                        return (lead['id'], lead['fields'])
+                    
+                    # Simple fuzzy check
+                    score = similarity_score(lead_name, existing_name, normalize_lead_name)
+                    if score >= 0.85:
+                        logger.info(f"  Fuzzy matched lead '{lead_name}' -> '{existing_name}' (score: {score:.2f})")
+                        return (lead['id'], lead['fields'])
+            except Exception as e:
+                logger.debug(f"Lead fuzzy lookup error: {e}")
         
         return None
     
@@ -1241,12 +1280,20 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
             
             logger.info(f"  Found: {lead_name} ({lead_title})")
             
+            # Check if this lead already exists (fuzzy match)
+            existing_lead = self._lead_exists_fuzzy(lead_name, company_id)
+            if existing_lead:
+                lead_id, lead_fields = existing_lead
+                logger.info(f"  Lead already exists (fuzzy match) - using existing record")
+                return (lead_id, lead_fields)
+            
             # Create the lead record - use only fields that exist in your table
             lead_data = {
                 'Lead Name': lead_name,
                 'Company': [company_id],
                 'Title': lead_title,
                 'Enrichment Status': 'Not Enriched',
+                'Lead Source': 'News Intelligence',
                 'Intelligence Notes': f"Found via news: {article.get('headline', '')[:150]}"
             }
             
@@ -1276,102 +1323,37 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
                     logger.error(f"  Lead creation failed completely: {e2}")
                     return None
             
-            # ENRICH THE LEAD using existing LeadEnricher if available
-            if self.lead_enricher:
-                logger.info(f"  Enriching lead...")
-                try:
-                    # Get company info for enrichment context
-                    company_website = company_info.get('website', '')
+            # ENRICH THE LEAD - inline enrichment
+            logger.info(f"  Enriching lead...")
+            try:
+                enriched_lead = self._enrich_lead_inline(
+                    lead_id=lead_id,
+                    lead_name=lead_name,
+                    lead_title=lead_title,
+                    company_id=company_id,
+                    company_name=company_name,
+                    linkedin_url=linkedin_url
+                )
+                if enriched_lead:
+                    logger.info(f"  ✓ Lead enriched - ICP: {enriched_lead.get('lead_icp', 'N/A')}")
                     
-                    # Search for additional lead info (email, LinkedIn, etc.)
-                    enriched_info = self.lead_enricher.search_lead_info(
-                        lead_name=lead_name,
-                        company_name=company_name,
-                        current_title=lead_title,
-                        company_website=company_website
-                    )
-                    
-                    if enriched_info and isinstance(enriched_info, dict):
-                        # Get company ICP for combined scoring
-                        try:
-                            company_record = self.companies_table.get(company_id)
-                            company_icp = company_record['fields'].get('ICP Fit Score', 50)
-                        except:
-                            company_icp = 50
-                        
-                        # Calculate lead ICP score
-                        lead_icp_data = {
-                            'title': enriched_info.get('title') or lead_title,
-                        }
-                        
-                        lead_icp, justification = self.lead_enricher.calculate_lead_icp_score(
-                            lead_icp_data, company_icp
+                    # GENERATE OUTREACH
+                    logger.info(f"  Generating outreach messages...")
+                    try:
+                        self._generate_outreach_inline(
+                            lead_id=lead_id,
+                            lead_name=lead_name,
+                            lead_title=enriched_lead.get('title') or lead_title,
+                            company_name=company_name,
+                            lead_icp=enriched_lead.get('lead_icp', 50),
+                            company_icp=enriched_lead.get('company_icp', 50)
                         )
+                        logger.info(f"  ✓ Outreach messages generated")
+                    except Exception as e:
+                        logger.warning(f"  Outreach generation failed: {e}")
                         
-                        # Prepare update data - only fields that exist
-                        update_data = {
-                            'Enrichment Status': 'Enriched',
-                            'Last Enriched': datetime.now().strftime('%Y-%m-%d'),
-                            'Lead ICP Score': lead_icp
-                        }
-                        
-                        # Add optional enriched fields
-                        if enriched_info.get('email'):
-                            update_data['Email'] = enriched_info['email']
-                        if enriched_info.get('title'):
-                            update_data['Title'] = enriched_info['title']
-                        if enriched_info.get('linkedin_url'):
-                            update_data['LinkedIn URL'] = enriched_info['linkedin_url']
-                        
-                        # Try to add ICP justification if field exists
-                        try:
-                            self.leads_table.update(lead_id, update_data)
-                            logger.info(f"  ✓ Lead enriched - ICP: {lead_icp}")
-                        except Exception as e:
-                            # Try without justification field
-                            logger.warning(f"  Partial enrichment update: {e}")
-                            try:
-                                basic_update = {
-                                    'Enrichment Status': 'Enriched',
-                                    'Last Enriched': datetime.now().strftime('%Y-%m-%d')
-                                }
-                                self.leads_table.update(lead_id, basic_update)
-                            except:
-                                pass
-                        
-                        # GENERATE OUTREACH using existing LeadEnricher
-                        logger.info(f"  Generating outreach messages...")
-                        try:
-                            outreach = self.lead_enricher.generate_general_outreach(
-                                lead_name=lead_name,
-                                title=enriched_info.get('title') or lead_title,
-                                company_name=company_name,
-                                lead_icp=lead_icp,
-                                company_icp=company_icp
-                            )
-                            
-                            if outreach and isinstance(outreach, dict):
-                                outreach_update = {}
-                                if outreach.get('email_message'):
-                                    outreach_update['General Outreach Email'] = outreach['email_message']
-                                if outreach.get('linkedin_connection'):
-                                    outreach_update['LinkedIn Connection Request'] = outreach['linkedin_connection']
-                                if outreach.get('linkedin_short'):
-                                    outreach_update['LinkedIn Short Message'] = outreach['linkedin_short']
-                                if outreach.get('linkedin_inmail'):
-                                    outreach_update['LinkedIn InMail'] = outreach['linkedin_inmail']
-                                
-                                if outreach_update:
-                                    try:
-                                        self.leads_table.update(lead_id, outreach_update)
-                                        logger.info(f"  ✓ Outreach messages generated")
-                                    except Exception as e:
-                                        logger.warning(f"  Could not save outreach: {e}")
-                        except Exception as e:
-                            logger.warning(f"  Outreach generation failed: {e}")
-                        
-                except Exception as e:
-                    logger.warning(f"  Lead enrichment failed: {e}")
+            except Exception as e:
+                logger.warning(f"  Lead enrichment failed: {e}")
             
             # Get updated lead record
             try:
@@ -1382,6 +1364,400 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
                 
         except Exception as e:
             logger.error(f"Error searching for lead: {e}")
+            return None
+    
+    # =========================================================================
+    # INLINE ENRICHMENT METHODS - Self-contained, no external dependencies
+    # =========================================================================
+    
+    def _enrich_company_inline(self, company_id: str, company_name: str) -> Optional[Dict]:
+        """Enrich company with web search - inline implementation"""
+        
+        prompt = f"""Research this biotech/pharma company for business intelligence:
+
+COMPANY: {company_name}
+
+Find and return:
+1. Website URL
+2. Headquarters location (city, country)
+3. Company size (employees): 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
+4. Latest funding round and amount (if any)
+5. Pipeline stage: Preclinical, Phase 1, Phase 2, Phase 3, Commercial
+6. Lead programs/products
+7. Therapeutic areas: Oncology, Autoimmune, Rare Disease, Infectious Disease, CNS, Metabolic, Other
+8. Technology platform focus: mAbs, Bispecifics, ADCs, Recombinant Proteins, Cell Therapy, Gene Therapy, Vaccines, Other
+9. Current CDMO/manufacturing status: No Public Partner, Has Partner, Building In-House, Unknown
+10. Any recent news or developments
+
+Return ONLY valid JSON:
+{{
+    "website": "https://...",
+    "location": "City, Country",
+    "company_size": "11-50",
+    "latest_funding": "Series B - $50M - Jan 2024",
+    "pipeline_stage": "Phase 2",
+    "lead_programs": "ABC-123 (anti-CD20 mAb) for autoimmune diseases",
+    "therapeutic_areas": ["Oncology", "Autoimmune"],
+    "focus_areas": ["mAbs", "Bispecifics"],
+    "manufacturing_status": "No Public Partner",
+    "recent_news": "Recently announced positive Phase 2 data...",
+    "icp_score": 65,
+    "icp_reasoning": "Mid-stage biotech with biologics focus, no public CDMO partner"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=2000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            # Parse JSON
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            data = json.loads(json_str.strip())
+            
+            # Update company record
+            update_fields = {
+                'Enrichment Status': 'Enriched',
+                'Last Enriched': datetime.now().strftime('%Y-%m-%d')
+            }
+            
+            if data.get('website'):
+                update_fields['Website'] = data['website']
+            if data.get('location'):
+                update_fields['Location/HQ'] = data['location']
+            if data.get('company_size'):
+                update_fields['Company Size'] = data['company_size']
+            if data.get('latest_funding'):
+                update_fields['Latest Funding Round'] = data['latest_funding']
+            if data.get('lead_programs'):
+                update_fields['Lead Programs'] = data['lead_programs']
+            if data.get('recent_news'):
+                update_fields['Intelligence Notes'] = data['recent_news'][:1000]
+            if data.get('icp_score'):
+                update_fields['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
+            if data.get('manufacturing_status'):
+                update_fields['Manufacturing Status'] = data['manufacturing_status']
+            
+            # Handle multi-select fields carefully
+            try:
+                if data.get('therapeutic_areas'):
+                    update_fields['Therapeutic Areas'] = data['therapeutic_areas']
+                if data.get('focus_areas'):
+                    update_fields['Focus Area'] = data['focus_areas']
+                if data.get('pipeline_stage'):
+                    # Pipeline stage might be multiple values
+                    stages = data['pipeline_stage']
+                    if isinstance(stages, str):
+                        stages = [stages]
+                    update_fields['Pipeline Stage'] = stages
+            except:
+                pass  # Skip multi-selects if they fail
+            
+            # Update record
+            try:
+                self.companies_table.update(company_id, update_fields)
+            except Exception as e:
+                # Try with minimal fields
+                logger.debug(f"Full update failed: {e}")
+                minimal = {
+                    'Enrichment Status': 'Enriched',
+                    'Last Enriched': datetime.now().strftime('%Y-%m-%d')
+                }
+                if data.get('website'):
+                    minimal['Website'] = data['website']
+                if data.get('location'):
+                    minimal['Location/HQ'] = data['location']
+                if data.get('icp_score'):
+                    minimal['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
+                self.companies_table.update(company_id, minimal)
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error in inline company enrichment: {e}")
+            return None
+    
+    def _enrich_lead_inline(self, lead_id: str, lead_name: str, lead_title: str,
+                           company_id: str, company_name: str, 
+                           linkedin_url: str = None) -> Optional[Dict]:
+        """Enrich lead with web search - inline implementation"""
+        
+        prompt = f"""Research this professional for contact information:
+
+NAME: {lead_name}
+TITLE: {lead_title}
+COMPANY: {company_name}
+{f"LINKEDIN: {linkedin_url}" if linkedin_url else ""}
+
+Find:
+1. Email address (search company website, press releases, LinkedIn, conference presentations)
+2. Verify current title
+3. LinkedIn URL (if not provided)
+4. Location (city, country)
+5. Any recent news, speaking engagements, or publications
+
+EMAIL FINDING PRIORITY - try these sources:
+- Company website team/leadership page
+- Press releases with contact info
+- Conference speaker lists
+- Published papers/patents
+- If not found, suggest email pattern based on company format (e.g., firstname.lastname@company.com)
+
+Return ONLY valid JSON:
+{{
+    "email": "email@company.com or null",
+    "email_confidence": "High|Medium|Low|Pattern Suggested",
+    "title": "Current verified title",
+    "linkedin_url": "https://linkedin.com/in/...",
+    "location": "City, Country",
+    "recent_activity": "Any recent news or speaking engagements"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=2000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            # Parse JSON
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            data = json.loads(json_str.strip())
+            
+            # Get company ICP for lead scoring
+            company_icp = 50
+            try:
+                company_record = self.companies_table.get(company_id)
+                company_icp = company_record['fields'].get('ICP Fit Score', 50)
+            except:
+                pass
+            
+            # Calculate lead ICP based on title
+            lead_icp = self._calculate_lead_icp(data.get('title') or lead_title, company_icp)
+            
+            # Update lead record
+            update_fields = {
+                'Enrichment Status': 'Enriched',
+                'Last Enriched': datetime.now().strftime('%Y-%m-%d'),
+                'Lead ICP Score': lead_icp
+            }
+            
+            if data.get('email'):
+                update_fields['Email'] = data['email']
+            if data.get('title'):
+                update_fields['Title'] = data['title']
+            if data.get('linkedin_url'):
+                update_fields['LinkedIn URL'] = data['linkedin_url']
+            if data.get('location'):
+                update_fields['Location'] = data['location']
+            
+            try:
+                self.leads_table.update(lead_id, update_fields)
+            except Exception as e:
+                logger.debug(f"Lead update error: {e}")
+                # Try minimal
+                self.leads_table.update(lead_id, {
+                    'Enrichment Status': 'Enriched',
+                    'Last Enriched': datetime.now().strftime('%Y-%m-%d')
+                })
+            
+            return {
+                'email': data.get('email'),
+                'title': data.get('title') or lead_title,
+                'linkedin_url': data.get('linkedin_url') or linkedin_url,
+                'lead_icp': lead_icp,
+                'company_icp': company_icp
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in inline lead enrichment: {e}")
+            return None
+    
+    def _calculate_lead_icp(self, title: str, company_icp: int) -> int:
+        """Calculate lead ICP score based on title and company ICP"""
+        if not title:
+            return 50
+        
+        title_lower = title.lower()
+        
+        # Title scoring
+        title_score = 50
+        
+        # High-value titles (70-90)
+        if any(t in title_lower for t in ['vp manufacturing', 'vp operations', 'head of cmc', 
+                                           'chief operating', 'coo', 'vp supply chain',
+                                           'head of manufacturing', 'svp operations']):
+            title_score = 85
+        elif any(t in title_lower for t in ['vp', 'vice president', 'head of', 'director']):
+            if any(f in title_lower for f in ['manufacturing', 'operations', 'cmc', 'supply', 'technical']):
+                title_score = 75
+            else:
+                title_score = 60
+        elif any(t in title_lower for t in ['ceo', 'chief executive', 'president', 'founder']):
+            title_score = 70  # Decision maker but not always technical
+        elif any(t in title_lower for t in ['senior director', 'executive director']):
+            title_score = 70
+        elif 'director' in title_lower:
+            title_score = 60
+        elif 'manager' in title_lower:
+            title_score = 45
+        
+        # Combine with company ICP (60% title, 40% company)
+        combined = int(title_score * 0.6 + company_icp * 0.4)
+        return min(max(combined, 0), 100)
+    
+    def _generate_outreach_inline(self, lead_id: str, lead_name: str, lead_title: str,
+                                  company_name: str, lead_icp: int, company_icp: int):
+        """Generate outreach messages - inline implementation"""
+        
+        # Get company profile for context
+        our_company = "European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs)"
+        if self.company_profile:
+            our_company = self.company_profile.get('Capabilities', our_company)
+        
+        prompt = f"""Generate professional outreach messages for this lead.
+
+LEAD:
+Name: {lead_name}
+Title: {lead_title}
+Company: {company_name}
+Lead ICP Score: {lead_icp}/100
+Company ICP Score: {company_icp}/90
+
+YOUR COMPANY:
+{our_company}
+- European CDMO with Sandoz-qualified facilities
+- Focus: Mid-size biotechs in Phase 2/3 or commercial
+- Strengths: Cost-efficient European quality, agile partner
+
+Generate 4 messages:
+
+1. EMAIL (120-150 words):
+Subject: [Natural subject line]
+- Conversational opener referencing their role/company
+- Why you might be relevant (no bullet lists)
+- Soft CTA
+- Sign: "Best regards, [Your Name], Business Development"
+
+2. LINKEDIN CONNECTION (180-200 chars):
+- Brief, friendly, reference their role
+
+3. LINKEDIN SHORT MESSAGE (300-400 chars):
+- For after connection accepted
+- Conversational, reference their background
+- End: "Best regards, [Your Name]"
+
+4. LINKEDIN INMAIL (250-350 words):
+Subject: [Natural subject]
+- Open with observation about their work
+- Share relevant perspective (not sales pitch)
+- Weave in relevance naturally
+- NO bullet lists
+- Sign: "Best regards, [Your Name], Business Development"
+
+Return ONLY valid JSON:
+{{
+    "email_subject": "Subject line",
+    "email_message": "Full email body",
+    "linkedin_connection": "Connection request text",
+    "linkedin_short": "Short message text",
+    "linkedin_inmail_subject": "InMail subject",
+    "linkedin_inmail": "Full InMail body"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            # Parse JSON
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            data = json.loads(json_str.strip())
+            
+            # Update lead record with outreach
+            outreach_update = {}
+            
+            if data.get('email_message'):
+                email_full = data['email_message']
+                if data.get('email_subject'):
+                    email_full = f"Subject: {data['email_subject']}\n\n{email_full}"
+                outreach_update['General Outreach Email'] = email_full
+            
+            if data.get('linkedin_connection'):
+                outreach_update['LinkedIn Connection Request'] = data['linkedin_connection']
+            
+            if data.get('linkedin_short'):
+                outreach_update['LinkedIn Short Message'] = data['linkedin_short']
+            
+            if data.get('linkedin_inmail'):
+                inmail_full = data['linkedin_inmail']
+                if data.get('linkedin_inmail_subject'):
+                    inmail_full = f"Subject: {data['linkedin_inmail_subject']}\n\n{inmail_full}"
+                outreach_update['LinkedIn InMail'] = inmail_full
+            
+            if outreach_update:
+                try:
+                    self.leads_table.update(lead_id, outreach_update)
+                except Exception as e:
+                    logger.debug(f"Outreach update error: {e}")
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error generating outreach: {e}")
             return None
     
     def create_news_trigger(self, lead_id: str, company_id: str, 
