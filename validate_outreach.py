@@ -493,7 +493,7 @@ Return ONLY JSON, no other text."""
                 'Outreach Validity Rating': validation.get('validity_rating', 'LOW'),
                 'Outreach Validity Score': validation.get('validity_score', 50),
                 'Outreach Validation Notes': self._format_validation_notes(validation),
-                'Outreach Validated At': validation.get('validated_at', datetime.now().isoformat())
+                'Outreach Validated At': datetime.now().strftime('%Y-%m-%d')
             }
             
             self.leads_table.update(record_id, update_data)
@@ -516,7 +516,7 @@ Return ONLY JSON, no other text."""
                 'Outreach Validity Rating': validation.get('validity_rating', 'LOW'),
                 'Outreach Validity Score': validation.get('validity_score', 50),
                 'Outreach Validation Notes': self._format_validation_notes(validation),
-                'Outreach Validated At': validation.get('validated_at', datetime.now().isoformat())
+                'Outreach Validated At': datetime.now().strftime('%Y-%m-%d')
             }
             
             self.trigger_history_table.update(record_id, update_data)
@@ -541,7 +541,7 @@ Return ONLY JSON, no other text."""
                 'Outreach Validity Rating': validation.get('validity_rating', 'LOW'),
                 'Outreach Validity Score': validation.get('validity_score', 50),
                 'Outreach Validation Notes': self._format_validation_notes(validation),
-                'Outreach Validated At': validation.get('validated_at', datetime.now().isoformat())
+                'Outreach Validated At': datetime.now().strftime('%Y-%m-%d')
             }
             
             self.campaign_leads_table.update(record_id, update_data)
