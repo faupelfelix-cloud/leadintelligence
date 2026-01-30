@@ -1685,13 +1685,15 @@ Return ONLY JSON."""
             # Update lead record with all fields
             update_fields = {
                 'Enrichment Status': 'Enriched',
-                'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d'),
-                'Enrichment Confidence': data.get('email_confidence', 'Medium'),
-                'Lead ICP Score': lead_icp,
-                'Lead ICP Tier': lead_icp_tier,
-                'Lead ICP Justification': lead_icp_justification,
-                'Combined Priority': combined_priority
+                'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d')
             }
+            
+            # Add ICP fields
+            update_fields['Lead ICP Score'] = lead_icp
+            update_fields['Lead ICP Tier'] = lead_icp_tier
+            update_fields['Lead ICP Justification'] = lead_icp_justification
+            update_fields['Combined Priority'] = combined_priority
+            update_fields['Enrichment Confidence'] = data.get('email_confidence', 'Medium')
             
             if data.get('email'):
                 update_fields['Email'] = data['email']
@@ -1704,20 +1706,19 @@ Return ONLY JSON."""
             if data.get('recent_activity'):
                 update_fields['Intelligence Notes'] = data['recent_activity'][:1000]
             
+            # Try full update first
             try:
                 self.leads_table.update(lead_id, update_fields)
-                logger.info(f"  ✓ Lead enriched - ICP: {lead_icp} ({lead_icp_tier})")
+                logger.info(f"  ✓ Lead enriched - ICP: {lead_icp} ({lead_icp_tier}), Combined: {combined_priority}")
             except Exception as e:
-                logger.debug(f"Lead update error: {e}")
-                # Try minimal
-                try:
-                    self.leads_table.update(lead_id, {
-                        'Enrichment Status': 'Enriched',
-                        'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d'),
-                        'Lead ICP Score': lead_icp
-                    })
-                except:
-                    pass
+                logger.warning(f"  Full lead update failed: {e}")
+                # Try updating fields one by one to identify which one fails
+                for field_name, field_value in update_fields.items():
+                    try:
+                        self.leads_table.update(lead_id, {field_name: field_value})
+                        logger.debug(f"    ✓ Updated {field_name}")
+                    except Exception as field_error:
+                        logger.warning(f"    ✗ Failed to update {field_name}: {field_error}")
             
             return {
                 'email': data.get('email'),
