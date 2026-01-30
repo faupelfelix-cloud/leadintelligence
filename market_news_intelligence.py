@@ -1373,39 +1373,55 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
     def _enrich_company_inline(self, company_id: str, company_name: str) -> Optional[Dict]:
         """Enrich company with web search - inline implementation"""
         
+        # Valid options for select fields
+        VALID_COMPANY_SIZE = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+']
+        VALID_FOCUS_AREAS = ['mAbs', 'Bispecifics', 'ADCs', 'Recombinant Proteins', 
+                            'Cell Therapy', 'Gene Therapy', 'Vaccines', 'Other']
+        VALID_TECH_PLATFORMS = ['Mammalian CHO', 'Mammalian Non-CHO', 'Microbial', 'Cell-Free', 'Other']
+        VALID_FUNDING_STAGES = ['Seed', 'Series A', 'Series B', 'Series C', 'Series D+', 'Public', 'Acquired', 'Unknown']
+        VALID_PIPELINE_STAGES = ['Preclinical', 'Phase 1', 'Phase 2', 'Phase 3', 'Commercial', 'Unknown']
+        VALID_THERAPEUTIC_AREAS = ['Oncology', 'Autoimmune', 'Rare Disease', 'Infectious Disease', 
+                                   'CNS', 'Metabolic', 'Cardiovascular', 'Other']
+        VALID_MANUFACTURING_STATUS = ['No Public Partner', 'Has Partner', 'Building In-House', 'Unknown']
+        
         prompt = f"""Research this biotech/pharma company for business intelligence:
 
 COMPANY: {company_name}
 
-Find and return:
+Find and return ALL of the following:
 1. Website URL
 2. LinkedIn company page URL
 3. Headquarters location (city, country)
-4. Company size (employees): 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
-5. Funding stage: Seed, Series A, Series B, Series C, Series D+, Public, Unknown
-6. Total funding raised (USD amount)
-7. Latest funding round and amount (if any)
-8. Pipeline stage: Preclinical, Phase 1, Phase 2, Phase 3, Commercial
-9. Lead programs/products
-10. Therapeutic areas: Oncology, Autoimmune, Rare Disease, Infectious Disease, CNS, Metabolic, Other
-11. Technology platforms: mAbs, Bispecifics, ADCs, Recombinant Proteins, Cell Therapy, Gene Therapy, Vaccines, Other
-12. Current CDMO/manufacturing status: No Public Partner, Has Partner, Building In-House, Unknown
-13. Any recent news or developments
-14. Urgency score (0-100): How urgent is outreach? Consider recent funding, pipeline progress, CDMO needs
+4. Company size - MUST be exactly one of: {', '.join(VALID_COMPANY_SIZE)}
+5. Focus areas - MUST be from: {', '.join(VALID_FOCUS_AREAS)}
+6. Technology platform - MUST be from: {', '.join(VALID_TECH_PLATFORMS)}
+7. Funding stage - MUST be exactly one of: {', '.join(VALID_FUNDING_STAGES)}
+8. Total funding raised (USD number only, e.g. 75000000)
+9. Latest funding round description (e.g. "Series B - $50M - Jan 2024")
+10. Pipeline stages - MUST be from: {', '.join(VALID_PIPELINE_STAGES)}
+11. Lead programs/products (text description)
+12. Therapeutic areas - MUST be from: {', '.join(VALID_THERAPEUTIC_AREAS)}
+13. Current CDMO partnerships (text - names of CDMOs if any)
+14. Manufacturing status - MUST be exactly one of: {', '.join(VALID_MANUFACTURING_STATUS)}
+15. Recent news or developments
+16. ICP Score (0-90) with justification
+17. Urgency Score (0-100) - how urgent is outreach?
 
 Return ONLY valid JSON:
 {{
     "website": "https://...",
     "linkedin_company_page": "https://linkedin.com/company/...",
     "location": "City, Country",
-    "company_size": "11-50",
+    "company_size": "51-200",
+    "focus_areas": ["mAbs", "Bispecifics"],
+    "technology_platforms": ["Mammalian CHO"],
     "funding_stage": "Series B",
     "total_funding_usd": 75000000,
-    "latest_funding": "Series B - $50M - Jan 2024",
-    "pipeline_stage": ["Phase 2"],
+    "latest_funding_round": "Series B - $50M - Jan 2024",
+    "pipeline_stages": ["Phase 2"],
     "lead_programs": "ABC-123 (anti-CD20 mAb) for autoimmune diseases",
     "therapeutic_areas": ["Oncology", "Autoimmune"],
-    "technology_platforms": ["mAbs", "Bispecifics"],
+    "cdmo_partnerships": "None publicly announced",
     "manufacturing_status": "No Public Partner",
     "recent_news": "Recently announced positive Phase 2 data...",
     "icp_score": 65,
@@ -1441,6 +1457,31 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
+            # Helper function to validate single select
+            def validate_single(value, valid_options, default='Unknown'):
+                if not value:
+                    return default
+                if value in valid_options:
+                    return value
+                # Try case-insensitive match
+                for opt in valid_options:
+                    if opt.lower() == value.lower():
+                        return opt
+                return default
+            
+            # Helper function to validate multi-select
+            def validate_multi(values, valid_options):
+                if not values:
+                    return []
+                if isinstance(values, str):
+                    values = [values]
+                validated = []
+                for val in values:
+                    matched = validate_single(val, valid_options, default=None)
+                    if matched and matched != 'Unknown':
+                        validated.append(matched)
+                return validated if validated else ['Other'] if 'Other' in valid_options else []
+            
             # Update company record with all fields
             update_fields = {
                 'Enrichment Status': 'Enriched',
@@ -1454,27 +1495,65 @@ Return ONLY JSON."""
                 update_fields['LinkedIn Company Page'] = data['linkedin_company_page']
             if data.get('location'):
                 update_fields['Location/HQ'] = data['location']
-            if data.get('company_size'):
-                update_fields['Company Size'] = data['company_size']
             
-            # Funding fields
+            # Company Size - validate
+            if data.get('company_size'):
+                update_fields['Company Size'] = validate_single(data['company_size'], VALID_COMPANY_SIZE, '51-200')
+            
+            # Focus Area - multi-select
+            if data.get('focus_areas'):
+                validated = validate_multi(data['focus_areas'], VALID_FOCUS_AREAS)
+                if validated:
+                    update_fields['Focus Area'] = validated
+            
+            # Technology Platform - multi-select
+            if data.get('technology_platforms'):
+                validated = validate_multi(data['technology_platforms'], VALID_TECH_PLATFORMS)
+                if validated:
+                    update_fields['Technology Platform'] = validated
+            
+            # Funding Stage - single select
             if data.get('funding_stage'):
-                update_fields['Funding Stage'] = data['funding_stage']
+                update_fields['Funding Stage'] = validate_single(data['funding_stage'], VALID_FUNDING_STAGES, 'Unknown')
+            
+            # Total Funding - number
             if data.get('total_funding_usd'):
                 try:
                     update_fields['Total Funding'] = float(data['total_funding_usd'])
                 except:
                     pass
-            if data.get('latest_funding'):
-                update_fields['Latest Funding Round'] = data['latest_funding']
             
-            # Programs and notes
+            # Latest Funding Round - text
+            if data.get('latest_funding_round'):
+                update_fields['Latest Funding Round'] = data['latest_funding_round']
+            
+            # Pipeline Stage - multi-select
+            if data.get('pipeline_stages'):
+                validated = validate_multi(data['pipeline_stages'], VALID_PIPELINE_STAGES)
+                if validated:
+                    update_fields['Pipeline Stage'] = validated
+            
+            # Lead Programs - text
             if data.get('lead_programs'):
                 update_fields['Lead Programs'] = data['lead_programs']
+            
+            # Therapeutic Areas - multi-select
+            if data.get('therapeutic_areas'):
+                validated = validate_multi(data['therapeutic_areas'], VALID_THERAPEUTIC_AREAS)
+                if validated:
+                    update_fields['Therapeutic Areas'] = validated
+            
+            # Current CDMO Partnerships - text
+            if data.get('cdmo_partnerships'):
+                update_fields['Current CDMO Partnerships'] = data['cdmo_partnerships']
+            
+            # Manufacturing Status - single select
+            if data.get('manufacturing_status'):
+                update_fields['Manufacturing Status'] = validate_single(data['manufacturing_status'], VALID_MANUFACTURING_STATUS, 'Unknown')
+            
+            # Intelligence Notes
             if data.get('recent_news'):
                 update_fields['Intelligence Notes'] = data['recent_news'][:1000]
-            if data.get('manufacturing_status'):
-                update_fields['Manufacturing Status'] = data['manufacturing_status']
             
             # Scores and justifications
             if data.get('icp_score'):
@@ -1484,41 +1563,13 @@ Return ONLY JSON."""
             if data.get('urgency_score'):
                 update_fields['Urgency Score'] = min(max(int(data['urgency_score']), 0), 100)
             
-            # Handle multi-select fields carefully
-            try:
-                if data.get('therapeutic_areas'):
-                    areas = data['therapeutic_areas']
-                    if isinstance(areas, str):
-                        areas = [areas]
-                    update_fields['Therapeutic Areas'] = areas
-            except:
-                pass
-            
-            try:
-                if data.get('technology_platforms'):
-                    platforms = data['technology_platforms']
-                    if isinstance(platforms, str):
-                        platforms = [platforms]
-                    update_fields['Technology Platform'] = platforms
-            except:
-                pass
-            
-            try:
-                if data.get('pipeline_stage'):
-                    stages = data['pipeline_stage']
-                    if isinstance(stages, str):
-                        stages = [stages]
-                    update_fields['Pipeline Stage'] = stages
-            except:
-                pass
-            
             # Update record
             try:
                 self.companies_table.update(company_id, update_fields)
                 logger.info(f"  ✓ Company enriched - ICP: {data.get('icp_score', 'N/A')}, Urgency: {data.get('urgency_score', 'N/A')}")
             except Exception as e:
-                # Try with minimal fields only
-                logger.debug(f"Full update failed: {e}")
+                logger.debug(f"Full company update failed: {e}")
+                # Try with minimal fields
                 minimal = {
                     'Enrichment Status': 'Enriched',
                     'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d')
@@ -1924,10 +1975,26 @@ Return ONLY JSON."""
             urgency = trigger_info.get('urgency', 'MEDIUM')
             if urgency == 'HIGH':
                 timing_recommendation = "Reach out within 24-48 hours while news is fresh"
+                best_time_to_send = "Morning (9-10 AM) - catch them at start of day"
             elif urgency == 'MEDIUM':
                 timing_recommendation = "Reach out within 1 week, reference the recent news"
+                best_time_to_send = "Tuesday-Thursday, mid-morning (10-11 AM)"
             else:
                 timing_recommendation = "Add to nurture sequence, reach out within 2 weeks"
+                best_time_to_send = "Any weekday, avoid Mondays and Fridays"
+            
+            # Build follow-up angle based on trigger type
+            follow_up_angle = ""
+            if trigger_type == 'FUNDING':
+                follow_up_angle = "Reference their recent funding and how it might accelerate their pipeline/manufacturing needs"
+            elif trigger_type == 'PIPELINE':
+                follow_up_angle = "Congratulate on clinical progress and discuss manufacturing scale-up requirements"
+            elif trigger_type == 'PROMOTION' or trigger_type == 'JOB_CHANGE':
+                follow_up_angle = "Congratulate on new role and offer to discuss how you can support their objectives"
+            elif trigger_type == 'CONFERENCE_ATTENDANCE':
+                follow_up_angle = "Reference meeting at conference and continue the conversation"
+            else:
+                follow_up_angle = f"Reference the recent news about {headline[:50]}... and explore potential collaboration"
             
             # Event date (article publication date or today)
             event_date = article.get('published', datetime.now().strftime('%Y-%m-%d'))
@@ -1942,7 +2009,9 @@ Return ONLY JSON."""
                 'Urgency': urgency,
                 'Description': description[:1000],
                 'Outreach Angle': outreach_angle[:500],
+                'Follow Up Angle': follow_up_angle,
                 'Timing Recommendation': timing_recommendation,
+                'Best Time to Send': best_time_to_send,
                 'Status': 'New',
                 'Sources': sources_text
             }
