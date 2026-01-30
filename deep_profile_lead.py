@@ -45,38 +45,251 @@ class DeepLeadProfiler:
             api_key=self.config['anthropic']['api_key']
         )
         
+        # Load company profile for outreach context
+        self.company_profile = self._load_company_profile()
+        
         logger.info("DeepLeadProfiler initialized successfully")
     
-    def get_leads_for_deep_profile(self, limit: Optional[int] = None) -> list:
-        """Get all leads marked for deep profiling (checkbox checked) that need profiling"""
+    def _load_company_profile(self) -> Dict:
+        """Load company profile from Airtable for outreach context"""
+        try:
+            table = self.base.table('Company Profile')
+            records = table.all()
+            if records:
+                logger.info("Company Profile loaded for outreach context")
+                return records[0]['fields']
+        except Exception as e:
+            logger.debug(f"Could not load Company Profile: {e}")
+        return {}
+    
+    def _generate_outreach_with_profile(self, lead_id: str, lead_name: str, lead_title: str,
+                                        company_name: str, profile_data: Dict) -> Optional[Dict]:
+        """Generate personalized outreach messages using deep profile intelligence"""
+        
+        # Extract key insights from profile for personalization
+        personality = profile_data.get('personality_assessment', {})
+        communication = profile_data.get('communication_style', {})
+        strategy = profile_data.get('outreach_strategy', {})
+        icebreakers = profile_data.get('icebreakers', [])
+        
+        # Get company profile for our context
+        our_company = "European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs)"
+        our_strengths = "Mammalian cell culture, mAbs, bispecifics, ADCs"
+        our_target = "Mid-size biotech companies"
+        
+        if self.company_profile:
+            our_company = self.company_profile.get('Capabilities', our_company)
+            our_strengths = self.company_profile.get('Strengths', our_strengths)
+            our_target = self.company_profile.get('Market Positioning', our_target)
+        
+        # Build personalization context from deep profile
+        personalization = f"""
+DEEP PROFILE INSIGHTS:
+- Communication style: {communication.get('preferred_style', 'Professional')}
+- Tone preference: {communication.get('tone_preference', 'Formal but friendly')}
+- Detail level: {communication.get('detail_orientation', 'Medium')}
+- Decision style: {personality.get('decision_making_style', 'Unknown')}
+
+ICEBREAKERS TO USE:
+{chr(10).join(['- ' + ib for ib in icebreakers[:3]]) if icebreakers else '- Reference their role and company'}
+
+APPROACH RECOMMENDATIONS:
+- Best channels: {', '.join(strategy.get('optimal_channels', ['Email', 'LinkedIn']))}
+- Best timing: {', '.join(strategy.get('timing_signals', ['Avoid Mondays'])[:2])}
+- Avoid: {', '.join(strategy.get('red_flags_avoid', ['Hard sales pitch'])[:2])}
+"""
+        
+        prompt = f"""Generate highly personalized outreach messages using deep profile intelligence.
+
+LEAD:
+Name: {lead_name}
+Title: {lead_title}
+Company: {company_name}
+
+{personalization}
+
+YOUR COMPANY:
+{our_company}
+- European CDMO with Sandoz-qualified facilities
+- Strengths: {our_strengths}
+- Target: {our_target}
+
+TONE & STYLE - ADAPT TO THEIR PROFILE:
+- Match their communication style preference
+- Use appropriate detail level for their profile
+- Incorporate one of the icebreakers naturally
+- Conversational and warm, NOT salesy
+- Focus on THEIR perspective, not your pitch
+- Soft CTAs
+- NO bullet points in emails
+
+Generate 4 messages:
+
+1. EMAIL (120-150 words):
+Subject: [Natural, personalized subject using an icebreaker insight]
+- Open with personalized hook from their profile
+- Why you might be relevant to THEM
+- Soft CTA matching their communication style
+- Sign: "Best regards, [Your Name], Business Development"
+
+2. LINKEDIN CONNECTION REQUEST (180-200 chars):
+- Brief, personalized to their interests/role
+- Why you'd like to connect
+
+3. LINKEDIN SHORT MESSAGE (300-400 chars):
+- For after connection accepted
+- Reference something specific from their profile
+- End: "Best regards, [Your Name]"
+
+4. LINKEDIN INMAIL (250-350 words):
+Subject: [Personalized subject]
+- Open with personalized observation
+- Share relevant perspective
+- NO bullet lists
+- Sign: "Best regards, [Your Name], Business Development"
+
+Return ONLY valid JSON:
+{{
+    "email_subject": "Subject line",
+    "email_body": "Full email body",
+    "linkedin_connection": "Connection request text",
+    "linkedin_short": "Short message text",
+    "linkedin_inmail_subject": "InMail subject",
+    "linkedin_inmail": "Full InMail body"
+}}
+
+Return ONLY JSON, no other text."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            if not response_text.strip():
+                logger.warning(f"  Empty response from API for outreach")
+                return None
+            
+            # Extract JSON
+            json_str = None
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text and "{" in response_text:
+                json_str = response_text.split("```")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            
+            if not json_str:
+                logger.warning(f"  No JSON found in outreach response")
+                return None
+            
+            # Clean and parse
+            json_str = json_str.strip()
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+            
+            return json.loads(json_str)
+            
+        except Exception as e:
+            logger.warning(f"  Error generating outreach: {e}")
+            return None
+    
+    def _update_lead_outreach(self, lead_id: str, outreach: Dict):
+        """Update lead record with new outreach messages"""
+        
+        update_fields = {
+            'Message Generated Date': datetime.now().strftime('%Y-%m-%d')
+        }
+        
+        if outreach.get('email_subject'):
+            update_fields['Email Subject'] = outreach['email_subject']
+        if outreach.get('email_body'):
+            update_fields['Email Body'] = outreach['email_body']
+        if outreach.get('linkedin_connection'):
+            update_fields['LinkedIn Connection Request'] = outreach['linkedin_connection']
+        if outreach.get('linkedin_short'):
+            update_fields['LinkedIn Short Message'] = outreach['linkedin_short']
+        if outreach.get('linkedin_inmail_subject'):
+            update_fields['LinkedIn InMail Subject'] = outreach['linkedin_inmail_subject']
+        if outreach.get('linkedin_inmail'):
+            update_fields['LinkedIn InMail Body'] = outreach['linkedin_inmail']
+        
+        try:
+            self.leads_table.update(lead_id, update_fields)
+            logger.info(f"  ✓ Outreach messages updated")
+        except Exception as e:
+            logger.warning(f"  Could not update outreach: {e}")
+    
+    def get_leads_for_deep_profile(self, limit: Optional[int] = None, 
+                                     min_icp: int = 0, max_icp: int = None,
+                                     refresh_days: int = 180) -> list:
+        """Get leads that need deep profiling based on ICP tier and refresh period.
+        
+        Args:
+            limit: Max number of leads to return
+            min_icp: Minimum Lead ICP score
+            max_icp: Maximum Lead ICP score (exclusive)
+            refresh_days: Days since last profile before re-profiling
+                         - 30 for monthly (ICP 75+)
+                         - 180 for bi-annual (ICP 50-74)
+        
+        Selection criteria:
+        1. "Deep Profile" checkbox = TRUE
+        2. Lead ICP Score in range [min_icp, max_icp)
+        3. Last Deep Profile Date is older than refresh_days OR never profiled
+        """
         from datetime import datetime, timedelta
         
         # Get leads marked for deep profiling
         formula = "{Deep Profile} = TRUE()"
         all_marked_leads = self.leads_table.all(formula=formula)
         
-        # Filter out leads that were profiled less than 6 months ago
-        six_months_ago = datetime.now() - timedelta(days=180)
+        # Filter by ICP and refresh period
+        cutoff_date = datetime.now() - timedelta(days=refresh_days)
         leads_to_profile = []
+        skipped_low_icp = 0
+        skipped_high_icp = 0
+        skipped_recent = 0
         
         for lead in all_marked_leads:
             fields = lead['fields']
+            lead_name = fields.get('Lead Name', 'Unknown')
+            lead_icp = fields.get('Lead ICP Score', 0) or fields.get('Lead ICP Fit Score', 0) or 0
+            
+            # Check ICP range
+            if lead_icp < min_icp:
+                skipped_low_icp += 1
+                continue
+            if max_icp is not None and lead_icp >= max_icp:
+                skipped_high_icp += 1
+                continue
+            
+            # Check last profile date
             last_profiled = fields.get('Last Deep Profile Date')
             
             if not last_profiled:
                 # Never profiled - include it
                 leads_to_profile.append(lead)
+                logger.debug(f"  Including {lead_name} (ICP {lead_icp}) - never profiled")
             else:
                 # Parse the date and check if it's old enough
                 try:
                     last_profiled_date = datetime.strptime(last_profiled, '%Y-%m-%d')
-                    if last_profiled_date < six_months_ago:
-                        # More than 6 months old - include it
-                        logger.info(f"  Including {fields.get('Lead Name', 'Unknown')} - last profiled {last_profiled}")
+                    if last_profiled_date < cutoff_date:
+                        # Old enough - include it
                         leads_to_profile.append(lead)
+                        logger.debug(f"  Including {lead_name} (ICP {lead_icp}) - last profiled {last_profiled}")
                     else:
                         # Too recent - skip it
-                        logger.info(f"  Skipping {fields.get('Lead Name', 'Unknown')} - recently profiled on {last_profiled}")
+                        skipped_recent += 1
+                        logger.debug(f"  Skipping {lead_name} - recently profiled on {last_profiled}")
                 except:
                     # Can't parse date - include it to be safe
                     leads_to_profile.append(lead)
@@ -84,8 +297,16 @@ class DeepLeadProfiler:
         if limit:
             leads_to_profile = leads_to_profile[:limit]
         
+        icp_range = f"ICP {min_icp}-{max_icp if max_icp else '100'}"
         logger.info(f"Found {len(all_marked_leads)} leads marked for profiling")
-        logger.info(f"After 6-month filter: {len(leads_to_profile)} leads need profiling")
+        logger.info(f"Filter: {icp_range}, refresh > {refresh_days} days")
+        logger.info(f"Result: {len(leads_to_profile)} leads need profiling")
+        if skipped_low_icp > 0:
+            logger.info(f"  Skipped {skipped_low_icp} below ICP threshold")
+        if skipped_high_icp > 0:
+            logger.info(f"  Skipped {skipped_high_icp} above ICP max (handled by other tier)")
+        if skipped_recent > 0:
+            logger.info(f"  Skipped {skipped_recent} recently profiled")
         
         return leads_to_profile
     
@@ -508,14 +729,33 @@ Only return valid JSON, no other text."""
             logger.error(f"  ✗ Failed to update Airtable: {str(e)}")
             raise
     
-    def profile_lead_batch(self, limit: Optional[int] = None):
-        """Process all leads marked for deep profiling"""
+    def profile_lead_batch(self, limit: Optional[int] = None,
+                           min_icp: int = 0, max_icp: int = None,
+                           refresh_days: int = 180, tier_name: str = None):
+        """Process leads marked for deep profiling based on ICP tier.
+        
+        Args:
+            limit: Max leads to process
+            min_icp: Minimum Lead ICP score
+            max_icp: Maximum Lead ICP score (exclusive)
+            refresh_days: Days since last profile before re-profiling
+            tier_name: Name for logging (e.g., "MONTHLY HIGH-PRIORITY")
+        """
+        
+        tier_display = tier_name or f"ICP {min_icp}-{max_icp if max_icp else '100'}"
         
         logger.info("=" * 60)
-        logger.info("AUTO MODE: DEEP PROFILING MARKED LEADS")
+        logger.info(f"DEEP PROFILING - {tier_display}")
+        logger.info(f"ICP Range: {min_icp} - {max_icp if max_icp else '100'}")
+        logger.info(f"Refresh Period: {refresh_days} days")
         logger.info("=" * 60)
         
-        leads = self.get_leads_for_deep_profile(limit)
+        leads = self.get_leads_for_deep_profile(
+            limit=limit,
+            min_icp=min_icp,
+            max_icp=max_icp,
+            refresh_days=refresh_days
+        )
         
         if not leads:
             logger.info("✓ No leads marked for deep profiling")
@@ -566,6 +806,21 @@ Only return valid JSON, no other text."""
                 # Save to Airtable
                 logger.info("  Saving profile...")
                 self.update_lead_profile(record_id, profile_data)
+                
+                # Generate personalized outreach using the deep profile
+                logger.info("  Generating personalized outreach messages...")
+                outreach = self._generate_outreach_with_profile(
+                    lead_id=record_id,
+                    lead_name=lead_name,
+                    lead_title=title,
+                    company_name=company_name,
+                    profile_data=profile_data
+                )
+                
+                if outreach:
+                    self._update_lead_outreach(record_id, outreach)
+                else:
+                    logger.warning("  ⚠ Could not generate outreach messages")
                 
                 # Update tracking fields
                 self.leads_table.update(record_id, {
@@ -673,19 +928,54 @@ def main():
     parser.add_argument('--auto', action='store_true', help='Auto mode: process all leads with "Deep Profile" checkbox')
     parser.add_argument('--lead', help='Manual mode: specific lead name (must match Airtable exactly)')
     parser.add_argument('--limit', type=int, help='Max number of leads to profile in auto mode')
+    parser.add_argument('--tier', choices=['monthly', 'biannual', 'all'],
+                       help='Tier preset: monthly (ICP 75+, 30d), biannual (ICP 50-74, 180d), all (ICP 50+)')
+    parser.add_argument('--min-icp', type=int, default=0, help='Minimum Lead ICP score')
+    parser.add_argument('--max-icp', type=int, default=None, help='Maximum Lead ICP score (exclusive)')
+    parser.add_argument('--refresh-days', type=int, default=180, help='Days since last profile before re-profiling')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
     
     args = parser.parse_args()
     
-    if not args.auto and not args.lead:
-        parser.error("Must specify either --auto or --lead <name>")
+    if not args.auto and not args.lead and not args.tier:
+        parser.error("Must specify either --auto, --lead <n>, or --tier <tier>")
+    
+    # Apply tier presets
+    tier_name = None
+    if args.tier == 'monthly':
+        # Monthly: ICP 75+, refresh after 30 days
+        args.min_icp = 75
+        args.max_icp = None
+        args.refresh_days = 30
+        tier_name = "MONTHLY HIGH-PRIORITY (ICP 75+)"
+        args.auto = True
+    elif args.tier == 'biannual':
+        # Bi-annual: ICP 50-74, refresh after 180 days
+        args.min_icp = 50
+        args.max_icp = 75
+        args.refresh_days = 180
+        tier_name = "BI-ANNUAL MEDIUM-PRIORITY (ICP 50-74)"
+        args.auto = True
+    elif args.tier == 'all':
+        # All ICP 50+, use default 180 day refresh
+        args.min_icp = 50
+        args.max_icp = None
+        args.refresh_days = 180
+        tier_name = "ALL PRIORITY LEADS (ICP 50+)"
+        args.auto = True
     
     try:
         profiler = DeepLeadProfiler(config_path=args.config)
         
-        if args.auto:
+        if args.auto or args.tier:
             logger.info("Running in AUTO mode")
-            success = profiler.profile_lead_batch(limit=args.limit)
+            success = profiler.profile_lead_batch(
+                limit=args.limit,
+                min_icp=args.min_icp,
+                max_icp=args.max_icp,
+                refresh_days=args.refresh_days,
+                tier_name=tier_name
+            )
         else:
             logger.info("Running in MANUAL mode")
             success = profiler.profile_lead(args.lead)
