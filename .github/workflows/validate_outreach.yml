@@ -1,0 +1,99 @@
+name: Outreach Message Validation
+
+on:
+  schedule:
+    # Runs twice daily at 8 AM and 4 PM UTC
+    - cron: '0 8 * * *'   # 8 AM UTC (9 AM CET, 10 AM CEST)
+    - cron: '0 16 * * *'  # 4 PM UTC (5 PM CET, 6 PM CEST)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Validation mode'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - leads-only
+          - triggers-only
+      limit:
+        description: 'Max records per table'
+        required: false
+        default: '20'
+      lead_id:
+        description: 'Specific lead ID (for single validation)'
+        required: false
+      trigger_id:
+        description: 'Specific trigger ID (for single validation)'
+        required: false
+
+jobs:
+  validate-outreach:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install anthropic pyairtable pyyaml requests
+    
+    - name: Create config file
+      run: |
+        cat > config.yaml << EOF
+        airtable:
+          api_key: "${{ secrets.AIRTABLE_API_KEY }}"
+          base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
+          tables:
+            companies: "Companies"
+            leads: "Leads"
+            intelligence_log: "Intelligence Log"
+        
+        anthropic:
+          api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
+          model: "claude-sonnet-4-20250514"
+        EOF
+    
+    - name: Run outreach validation
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+      run: |
+        MODE="${{ github.event.inputs.mode || 'all' }}"
+        LIMIT="${{ github.event.inputs.limit || '20' }}"
+        LEAD_ID="${{ github.event.inputs.lead_id }}"
+        TRIGGER_ID="${{ github.event.inputs.trigger_id }}"
+        
+        if [ -n "$LEAD_ID" ]; then
+          echo "Validating specific lead: $LEAD_ID"
+          python validate_outreach.py --lead-id "$LEAD_ID"
+        elif [ -n "$TRIGGER_ID" ]; then
+          echo "Validating specific trigger: $TRIGGER_ID"
+          python validate_outreach.py --trigger-id "$TRIGGER_ID"
+        elif [ "$MODE" == "leads-only" ]; then
+          echo "Validating leads only..."
+          python validate_outreach.py --leads-only --limit $LIMIT
+        elif [ "$MODE" == "triggers-only" ]; then
+          echo "Validating triggers only..."
+          python validate_outreach.py --triggers-only --limit $LIMIT
+        else
+          echo "Validating all pending outreach messages..."
+          python validate_outreach.py --all --limit $LIMIT
+        fi
+    
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: outreach-validation-logs-${{ github.run_id }}
+        path: |
+          *.log
+        retention-days: 14
