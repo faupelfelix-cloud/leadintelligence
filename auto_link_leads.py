@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Auto-Link Leads to Companies
-Automatically links leads to companies based on company name matching
+Automatically links leads to companies based on company name matching with fuzzy support
 """
 
 import os
@@ -10,6 +10,15 @@ import yaml
 import logging
 from typing import Dict, List, Optional
 from pyairtable import Api
+
+# Import fuzzy matching utilities
+try:
+    from fuzzy_match import normalize_company_name, similarity_score
+    HAS_FUZZY_MATCH = True
+except ImportError:
+    HAS_FUZZY_MATCH = False
+    normalize_company_name = lambda x: x.lower().strip() if x else ""
+    similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
 
 # Configure logging
 logging.basicConfig(
@@ -24,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class LeadCompanyLinker:
-    """Automatically link leads to companies based on name matching"""
+    """Automatically link leads to companies based on name matching with fuzzy support"""
     
     def __init__(self, config_path: str = "config.yaml"):
         """Initialize with configuration"""
@@ -41,6 +50,7 @@ class LeadCompanyLinker:
         self.company_cache = {}
         
         logger.info("LeadCompanyLinker initialized successfully")
+        logger.info(f"  Fuzzy matching: {'ENABLED' if HAS_FUZZY_MATCH else 'DISABLED'}")
     
     def build_company_cache(self):
         """Build a cache of all companies for quick lookup"""
@@ -51,30 +61,45 @@ class LeadCompanyLinker:
         for company in all_companies:
             company_name = company['fields'].get('Company Name', '').strip()
             if company_name:
-                # Store both exact name and lowercase for fuzzy matching
-                self.company_cache[company_name.lower()] = {
+                # Store with normalized name as key
+                norm_name = normalize_company_name(company_name)
+                self.company_cache[norm_name] = {
                     'id': company['id'],
-                    'name': company_name
+                    'name': company_name,
+                    'original_name': company_name
                 }
         
         logger.info(f"  ✓ Cached {len(self.company_cache)} companies")
     
-    def find_company_by_name(self, company_name: str) -> Optional[str]:
-        """Find company ID by name (case-insensitive)"""
+    def find_company_by_name(self, company_name: str, threshold: float = 0.85) -> Optional[str]:
+        """Find company ID by name with fuzzy matching support"""
         if not company_name:
             return None
         
-        company_name_lower = company_name.strip().lower()
+        norm_query = normalize_company_name(company_name)
         
-        # Try exact match first
-        if company_name_lower in self.company_cache:
-            return self.company_cache[company_name_lower]['id']
+        # Try exact match first (after normalization)
+        if norm_query in self.company_cache:
+            return self.company_cache[norm_query]['id']
         
-        # Try fuzzy match (contains)
-        for cached_name, company_data in self.company_cache.items():
-            if cached_name in company_name_lower or company_name_lower in cached_name:
-                logger.info(f"    Fuzzy matched '{company_name}' to '{company_data['name']}'")
-                return company_data['id']
+        # Try fuzzy match
+        best_match = None
+        best_score = 0.0
+        
+        for norm_name, company_data in self.company_cache.items():
+            # Calculate similarity
+            score = similarity_score(company_name, company_data['original_name'], normalize_company_name)
+            
+            if score > best_score:
+                best_score = score
+                best_match = company_data
+        
+        # Return if above threshold
+        if best_score >= threshold and best_match:
+            matched_name = best_match['original_name']
+            if best_score < 1.0:
+                logger.info(f"    Fuzzy matched '{company_name}' -> '{matched_name}' (score: {best_score:.2f})")
+            return best_match['id']
         
         return None
     
