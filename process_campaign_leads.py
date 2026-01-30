@@ -25,6 +25,17 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 
+# Import fuzzy matching utilities
+try:
+    from fuzzy_match import FuzzyMatcher, normalize_company_name, normalize_lead_name, similarity_score
+    HAS_FUZZY_MATCH = True
+except ImportError:
+    HAS_FUZZY_MATCH = False
+    FuzzyMatcher = None
+    normalize_company_name = lambda x: x.lower().strip() if x else ""
+    normalize_lead_name = lambda x: x.lower().strip() if x else ""
+    similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
+
 # Import existing enrichers
 from enrich_companies import CompanyEnricher
 from enrich_leads import LeadEnricher
@@ -81,14 +92,40 @@ class CampaignLeadsProcessor:
     # ==================== COMPANY OPERATIONS ====================
     
     def lookup_company(self, company_name: str) -> Tuple[Optional[Dict], Optional[str]]:
-        """Look up company in Companies table"""
+        """Look up company in Companies table with fuzzy matching"""
         try:
+            # First try exact match
             formula = match({"Company Name": company_name})
             records = self.companies_table.all(formula=formula)
             
             if records:
                 record = records[0]
                 return record['fields'], record['id']
+            
+            # Try fuzzy match
+            if HAS_FUZZY_MATCH:
+                # Normalize the query
+                norm_query = normalize_company_name(company_name)
+                
+                # Get all companies and find best match
+                all_companies = self.companies_table.all()
+                best_match = None
+                best_score = 0.0
+                
+                for record in all_companies:
+                    existing_name = record['fields'].get('Company Name', '')
+                    score = similarity_score(company_name, existing_name, normalize_company_name)
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_match = record
+                
+                # If good fuzzy match found (>= 85% similarity)
+                if best_score >= 0.85 and best_match:
+                    matched_name = best_match['fields'].get('Company Name', '')
+                    logger.info(f"    Fuzzy matched company '{company_name}' -> '{matched_name}' (score: {best_score:.2f})")
+                    return best_match['fields'], best_match['id']
+            
             return None, None
         except Exception as e:
             logger.error(f"Error looking up company: {e}")
@@ -134,20 +171,50 @@ class CampaignLeadsProcessor:
     # ==================== LEAD OPERATIONS ====================
     
     def lookup_lead(self, email: str, name: str, company: str) -> Tuple[Optional[Dict], Optional[str]]:
-        """Look up lead in Leads table by email or name+company"""
+        """Look up lead in Leads table by email or name+company with fuzzy matching"""
         try:
-            # Try by email first
+            # Try by email first (exact match)
             if email and '@' in email:
                 formula = match({"Email": email})
                 records = self.leads_table.all(formula=formula)
                 if records:
                     return records[0]['fields'], records[0]['id']
             
-            # Try by name
+            # Try by exact name match
             formula = match({"Lead Name": name})
             records = self.leads_table.all(formula=formula)
             if records:
                 return records[0]['fields'], records[0]['id']
+            
+            # Try fuzzy name match
+            if HAS_FUZZY_MATCH and name:
+                # Get all leads (or filter by company if we have company ID)
+                all_leads = self.leads_table.all()
+                norm_query = normalize_lead_name(name)
+                
+                best_match = None
+                best_score = 0.0
+                
+                for record in all_leads:
+                    existing_name = record['fields'].get('Lead Name', '')
+                    score = similarity_score(name, existing_name, normalize_lead_name)
+                    
+                    # Also check if same company (if company name provided)
+                    if company and score >= 0.85:
+                        # Get linked company name
+                        lead_company = record['fields'].get('Company', [])
+                        # For now, just use the score - company matching is secondary
+                        pass
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_match = record
+                
+                # If good fuzzy match found (>= 85% similarity)
+                if best_score >= 0.85 and best_match:
+                    matched_name = best_match['fields'].get('Lead Name', '')
+                    logger.info(f"    Fuzzy matched lead '{name}' -> '{matched_name}' (score: {best_score:.2f})")
+                    return best_match['fields'], best_match['id']
             
             return None, None
         except Exception as e:
