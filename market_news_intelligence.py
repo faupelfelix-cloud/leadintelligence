@@ -1936,6 +1936,11 @@ Return ONLY JSON."""
                            article: Dict, analysis: Dict, trigger_info: Dict) -> Optional[str]:
         """Create NEWS trigger event in Trigger History with article URL and outreach"""
         
+        # Validate lead_id
+        if not lead_id or not lead_id.startswith('rec'):
+            logger.error(f"Invalid lead_id for trigger creation: {lead_id}")
+            return None
+        
         try:
             trigger_type = trigger_info.get('type', 'NEWS')
             
@@ -2280,17 +2285,22 @@ Return ONLY JSON."""
                     continue
                 
                 lead_id, lead_fields = lead_result
+                logger.info(f"  Lead ID for trigger: {lead_id}")
                 
                 # STEP 3: Create trigger(s)
                 if trigger_events:
                     for trigger in trigger_events:
                         if isinstance(trigger, dict):
-                            self.create_news_trigger(lead_id, company_id, article, analysis, trigger)
+                            trigger_id = self.create_news_trigger(lead_id, company_id, article, analysis, trigger)
+                            if trigger_id:
+                                logger.info(f"  ✓ Trigger {trigger_id} linked to Lead {lead_id}")
                             stats['triggers_created'] += 1
                 else:
                     # Create generic NEWS trigger
                     generic_trigger = {'type': 'NEWS', 'urgency': 'MEDIUM', 'details': ''}
-                    self.create_news_trigger(lead_id, company_id, article, analysis, generic_trigger)
+                    trigger_id = self.create_news_trigger(lead_id, company_id, article, analysis, generic_trigger)
+                    if trigger_id:
+                        logger.info(f"  ✓ Trigger {trigger_id} linked to Lead {lead_id}")
                     stats['triggers_created'] += 1
                 
                 # Rate limiting between companies
