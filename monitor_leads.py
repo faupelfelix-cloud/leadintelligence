@@ -84,18 +84,76 @@ class LeadSurveillance:
             logger.warning(f"Could not fetch conference list: {str(e)}")
             return ""
     
-    def get_leads_for_monitoring(self, limit: Optional[int] = None) -> List[Dict]:
-        """Get all leads marked for surveillance monitoring"""
+    def get_leads_for_monitoring(self, limit: Optional[int] = None, 
+                                   min_icp: int = 50, max_icp: int = None,
+                                   include_company_icp: bool = False) -> List[Dict]:
+        """Get leads for surveillance monitoring
+        
+        Selection criteria:
+        1. Monitor Activity = TRUE (checkbox)
+        2. Lead ICP Score in range [min_icp, max_icp)
+        3. OR Company ICP >= min_icp (if include_company_icp=True and Lead ICP < min_icp)
+        
+        Tiered monitoring:
+        - Weekly (min_icp=75): High-priority leads
+        - Bi-weekly (min_icp=50, max_icp=75): Medium-priority leads  
+        - Monthly (min_icp=30, max_icp=50): Lower-priority leads
+        - Monthly company ICP (include_company_icp=True): Leads at high-value companies
+        """
         
         # Get leads marked for monitoring
         formula = "{Monitor Activity} = TRUE()"
         all_marked_leads = self.leads_table.all(formula=formula)
         
-        if limit:
-            all_marked_leads = all_marked_leads[:limit]
+        # Filter by ICP score
+        filtered_leads = []
+        skipped_low_icp = 0
+        skipped_high_icp = 0
+        included_by_company_icp = 0
         
-        logger.info(f"Found {len(all_marked_leads)} leads marked for monitoring")
-        return all_marked_leads
+        for lead in all_marked_leads:
+            fields = lead['fields']
+            lead_icp = fields.get('Lead ICP Score', 0) or fields.get('Lead ICP Fit Score', 0) or 0
+            company_icp = 0
+            
+            # Get company ICP
+            if 'Company' in fields:
+                try:
+                    company = self.companies_table.get(fields['Company'][0])
+                    company_icp = company['fields'].get('ICP Fit Score', 0) or 0
+                except:
+                    pass
+            
+            # Check if lead qualifies based on Lead ICP
+            if lead_icp >= min_icp:
+                if max_icp is None or lead_icp < max_icp:
+                    filtered_leads.append(lead)
+                else:
+                    skipped_high_icp += 1  # Will be handled by higher-tier run
+            # Check if lead qualifies based on Company ICP (for monthly company ICP run)
+            elif include_company_icp and company_icp >= 50 and lead_icp < 30:
+                # Only include if lead ICP is below 30 (not covered by other tiers)
+                filtered_leads.append(lead)
+                included_by_company_icp += 1
+            else:
+                skipped_low_icp += 1
+        
+        if limit:
+            filtered_leads = filtered_leads[:limit]
+        
+        tier_desc = f"Lead ICP {min_icp}-{max_icp if max_icp else '100'}"
+        if include_company_icp:
+            tier_desc += " OR Company ICP >= 50"
+        
+        logger.info(f"Found {len(filtered_leads)} leads for monitoring ({tier_desc})")
+        if skipped_low_icp > 0:
+            logger.info(f"  Skipped {skipped_low_icp} leads below threshold")
+        if skipped_high_icp > 0:
+            logger.info(f"  Skipped {skipped_high_icp} leads above max (handled by higher tier)")
+        if included_by_company_icp > 0:
+            logger.info(f"  Included {included_by_company_icp} leads by Company ICP")
+        
+        return filtered_leads
     
     def get_company_context(self, company_ids: list) -> Optional[Dict]:
         """Get company information for context"""
@@ -110,19 +168,34 @@ class LeadSurveillance:
     
     def monitor_lead_activity(self, lead_name: str, title: str = "", company_name: str = "",
                              linkedin_url: str = "", x_profile: str = "", 
-                             last_monitored: str = None, company_context: Dict = None) -> Dict:
-        """Monitor lead's recent activity using AI with web search"""
+                             last_monitored: str = None, company_context: Dict = None,
+                             lookback_days: int = 14) -> Dict:
+        """Monitor lead's recent activity using AI with web search
         
-        # Calculate monitoring period
+        Args:
+            lookback_days: Maximum days to look back for news/activity.
+                          - 7 for weekly (high-priority leads)
+                          - 14 for bi-weekly (medium-priority)
+                          - 30 for monthly (lower-priority)
+        """
+        
+        # Calculate monitoring period based on lookback_days
+        # If last_monitored is set and more recent than lookback, use that instead
         if last_monitored:
             try:
                 last_date = datetime.strptime(last_monitored, '%Y-%m-%d')
                 days_since = (datetime.now() - last_date).days
-                period = f"last {days_since} days"
+                # Use the smaller of days_since or lookback_days
+                actual_lookback = min(days_since, lookback_days)
+                if actual_lookback <= 0:
+                    actual_lookback = lookback_days
             except:
-                period = "last 2 weeks"
+                actual_lookback = lookback_days
         else:
-            period = "last 2 weeks"
+            actual_lookback = lookback_days
+        
+        period = f"last {actual_lookback} days"
+        cutoff_date = (datetime.now() - timedelta(days=actual_lookback)).strftime('%Y-%m-%d')
         
         context_info = f"""
 Lead: {lead_name}
@@ -130,7 +203,7 @@ Title: {title or 'Unknown'}
 Company: {company_name or 'Unknown'}
 LinkedIn: {linkedin_url or 'Not provided'}
 X Profile: {x_profile or 'Not provided'}
-Monitoring Period: {period}
+Monitoring Period: {period} (since {cutoff_date})
 """
         
         if company_context:
@@ -155,7 +228,8 @@ Your mission: Monitor this lead's recent activity and identify relevant updates 
 
 CRITICAL FILTERING RULES:
 - Today's date is: {datetime.now().strftime('%Y-%m-%d')}
-- ONLY report information from the last 30 days (since {(datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')})
+- ONLY report information from the {period} (since {cutoff_date})
+- IGNORE any news, posts, or events OLDER than {cutoff_date}
 - ONLY report FUTURE conferences (starting today or later)
 - ONLY include mammalian cell culture biologics (mAbs, bispecific antibodies, ADCs, Fc-fusion proteins)
 - EXCLUDE: Cell therapy, gene therapy, viral vectors, plasmids, mRNA, oligonucleotides, vaccines
@@ -631,17 +705,45 @@ Only return valid JSON, no other text."""
             logger.error(f"  ✗ Failed to update Airtable: {str(e)}")
             raise
     
-    def monitor_leads_batch(self, limit: Optional[int] = None):
-        """Monitor all leads marked for surveillance"""
+    def monitor_leads_batch(self, limit: Optional[int] = None, min_icp: int = 50, 
+                           max_icp: int = None, lookback_days: int = 14,
+                           include_company_icp: bool = False, tier_name: str = None):
+        """Monitor all leads marked for surveillance
+        
+        Args:
+            limit: Max number of leads to process
+            min_icp: Minimum Lead ICP score to monitor
+            max_icp: Maximum Lead ICP score (exclusive) - for tiered monitoring
+            lookback_days: How many days back to search for news/activity
+            include_company_icp: Also include leads with Company ICP >= 50
+            tier_name: Name for logging (e.g., "WEEKLY HIGH-PRIORITY")
+        
+        Tiered monitoring schedule:
+            Weekly (ICP 75+): lookback_days=7
+            Bi-weekly (ICP 50-74): lookback_days=14
+            Monthly (ICP 30-49): lookback_days=30
+            Monthly Company ICP (Lead ICP <30, Company ICP 50+): lookback_days=30
+        """
+        
+        tier_display = tier_name or f"ICP {min_icp}-{max_icp if max_icp else '100'}"
         
         logger.info("=" * 60)
-        logger.info("LEAD SURVEILLANCE - BATCH MONITORING")
+        logger.info(f"LEAD SURVEILLANCE - {tier_display}")
+        logger.info(f"ICP Range: {min_icp} - {max_icp if max_icp else '100'}")
+        logger.info(f"Lookback Period: {lookback_days} days")
+        if include_company_icp:
+            logger.info(f"Including leads with Company ICP >= 50")
         logger.info("=" * 60)
         
-        leads = self.get_leads_for_monitoring(limit)
+        leads = self.get_leads_for_monitoring(
+            limit=limit, 
+            min_icp=min_icp, 
+            max_icp=max_icp,
+            include_company_icp=include_company_icp
+        )
         
         if not leads:
-            logger.info("✓ No leads marked for monitoring")
+            logger.info("✓ No leads to monitor in this tier")
             return True
         
         total = len(leads)
@@ -672,9 +774,10 @@ Only return valid JSON, no other text."""
             
             logger.info(f"  Company: {company_name}")
             logger.info(f"  Last monitored: {last_monitored or 'Never'}")
+            logger.info(f"  Lookback: {lookback_days} days")
             
             try:
-                # Monitor activity
+                # Monitor activity with tier-specific lookback
                 activity_data = self.monitor_lead_activity(
                     lead_name=lead_name,
                     title=title,
@@ -682,7 +785,8 @@ Only return valid JSON, no other text."""
                     linkedin_url=linkedin_url,
                     x_profile=x_profile,
                     last_monitored=last_monitored,
-                    company_context=company_context
+                    company_context=company_context,
+                    lookback_days=lookback_days
                 )
                 
                 if activity_data.get('error'):
@@ -734,13 +838,59 @@ def main():
     
     parser = argparse.ArgumentParser(description='Monitor lead activity across platforms')
     parser.add_argument('--limit', type=int, help='Max number of leads to monitor')
+    parser.add_argument('--min-icp', type=int, default=50, 
+                       help='Minimum Lead ICP score to monitor (default: 50)')
+    parser.add_argument('--max-icp', type=int, default=None,
+                       help='Maximum Lead ICP score (exclusive) for tiered monitoring')
+    parser.add_argument('--lookback-days', type=int, default=14,
+                       help='Days to look back for news/activity (default: 14)')
+    parser.add_argument('--include-company-icp', action='store_true',
+                       help='Also include leads with Company ICP >= 50 (for monthly run)')
+    parser.add_argument('--tier', choices=['weekly', 'biweekly', 'monthly', 'monthly-company'],
+                       help='Preset tier configuration')
     parser.add_argument('--config', default='config.yaml', help='Path to config file')
     
     args = parser.parse_args()
     
+    # Apply tier presets
+    if args.tier == 'weekly':
+        # Weekly: ICP 75+, lookback 7 days
+        args.min_icp = 75
+        args.max_icp = None
+        args.lookback_days = 7
+        tier_name = "WEEKLY HIGH-PRIORITY (ICP 75+)"
+    elif args.tier == 'biweekly':
+        # Bi-weekly: ICP 50-74, lookback 14 days
+        args.min_icp = 50
+        args.max_icp = 75
+        args.lookback_days = 14
+        tier_name = "BI-WEEKLY MEDIUM-PRIORITY (ICP 50-74)"
+    elif args.tier == 'monthly':
+        # Monthly: ICP 30-49, lookback 30 days
+        args.min_icp = 30
+        args.max_icp = 50
+        args.lookback_days = 30
+        tier_name = "MONTHLY LOWER-PRIORITY (ICP 30-49)"
+    elif args.tier == 'monthly-company':
+        # Monthly Company ICP: Lead ICP <30 but Company ICP 50+, lookback 30 days
+        args.min_icp = 0
+        args.max_icp = 30
+        args.lookback_days = 30
+        args.include_company_icp = True
+        tier_name = "MONTHLY COMPANY-ICP (Lead ICP <30, Company ICP 50+)"
+    else:
+        tier_name = None
+    
     try:
         surveillance = LeadSurveillance(config_path=args.config)
-        success = surveillance.monitor_leads_batch(limit=args.limit)
+        success = surveillance.monitor_leads_batch(
+            limit=args.limit, 
+            min_icp=args.min_icp,
+            max_icp=args.max_icp,
+            lookback_days=args.lookback_days,
+            include_company_icp=args.include_company_icp,
+            tier_name=tier_name
+        )
         sys.exit(0 if success else 1)
     except FileNotFoundError:
         logger.error(f"Config file not found: {args.config}")
