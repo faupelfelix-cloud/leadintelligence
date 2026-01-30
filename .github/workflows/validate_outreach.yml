@@ -2,14 +2,14 @@ name: Outreach Message Validation
 
 on:
   schedule:
-    # Runs twice daily at 8 AM and 4 PM UTC
-    - cron: '0 8 * * *'   # 8 AM UTC (9 AM CET, 10 AM CEST)
-    - cron: '0 16 * * *'  # 4 PM UTC (5 PM CET, 6 PM CEST)
+    # Runs twice daily at 7 AM and 7 PM UTC
+    - cron: '0 7 * * *'   # 7 AM UTC (8 AM CET, 9 AM CEST)
+    - cron: '0 19 * * *'  # 7 PM UTC (8 PM CET, 9 PM CEST)
   workflow_dispatch:
     inputs:
       mode:
         description: 'Validation mode'
-        required: true
+        required: false
         default: 'all'
         type: choice
         options:
@@ -17,9 +17,8 @@ on:
           - leads-only
           - triggers-only
       limit:
-        description: 'Max records per table'
+        description: 'Max records per table (leave empty for no limit)'
         required: false
-        default: '20'
       lead_id:
         description: 'Specific lead ID (for single validation)'
         required: false
@@ -68,7 +67,7 @@ jobs:
         AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
       run: |
         MODE="${{ github.event.inputs.mode || 'all' }}"
-        LIMIT="${{ github.event.inputs.limit || '20' }}"
+        LIMIT="${{ github.event.inputs.limit }}"
         LEAD_ID="${{ github.event.inputs.lead_id }}"
         TRIGGER_ID="${{ github.event.inputs.trigger_id }}"
         
@@ -80,13 +79,25 @@ jobs:
           python validate_outreach.py --trigger-id "$TRIGGER_ID"
         elif [ "$MODE" == "leads-only" ]; then
           echo "Validating leads only..."
-          python validate_outreach.py --leads-only --limit $LIMIT
+          if [ -n "$LIMIT" ]; then
+            python validate_outreach.py --leads-only --limit $LIMIT
+          else
+            python validate_outreach.py --leads-only
+          fi
         elif [ "$MODE" == "triggers-only" ]; then
           echo "Validating triggers only..."
-          python validate_outreach.py --triggers-only --limit $LIMIT
+          if [ -n "$LIMIT" ]; then
+            python validate_outreach.py --triggers-only --limit $LIMIT
+          else
+            python validate_outreach.py --triggers-only
+          fi
         else
-          echo "Validating all pending outreach messages..."
-          python validate_outreach.py --all --limit $LIMIT
+          echo "Validating all pending outreach messages (unvalidated only)..."
+          if [ -n "$LIMIT" ]; then
+            python validate_outreach.py --all --limit $LIMIT
+          else
+            python validate_outreach.py --all
+          fi
         fi
     
     - name: Upload logs
