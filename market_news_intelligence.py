@@ -1379,30 +1379,38 @@ COMPANY: {company_name}
 
 Find and return:
 1. Website URL
-2. Headquarters location (city, country)
-3. Company size (employees): 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
-4. Latest funding round and amount (if any)
-5. Pipeline stage: Preclinical, Phase 1, Phase 2, Phase 3, Commercial
-6. Lead programs/products
-7. Therapeutic areas: Oncology, Autoimmune, Rare Disease, Infectious Disease, CNS, Metabolic, Other
-8. Technology platform focus: mAbs, Bispecifics, ADCs, Recombinant Proteins, Cell Therapy, Gene Therapy, Vaccines, Other
-9. Current CDMO/manufacturing status: No Public Partner, Has Partner, Building In-House, Unknown
-10. Any recent news or developments
+2. LinkedIn company page URL
+3. Headquarters location (city, country)
+4. Company size (employees): 1-10, 11-50, 51-200, 201-500, 501-1000, 1000+
+5. Funding stage: Seed, Series A, Series B, Series C, Series D+, Public, Unknown
+6. Total funding raised (USD amount)
+7. Latest funding round and amount (if any)
+8. Pipeline stage: Preclinical, Phase 1, Phase 2, Phase 3, Commercial
+9. Lead programs/products
+10. Therapeutic areas: Oncology, Autoimmune, Rare Disease, Infectious Disease, CNS, Metabolic, Other
+11. Technology platforms: mAbs, Bispecifics, ADCs, Recombinant Proteins, Cell Therapy, Gene Therapy, Vaccines, Other
+12. Current CDMO/manufacturing status: No Public Partner, Has Partner, Building In-House, Unknown
+13. Any recent news or developments
+14. Urgency score (0-100): How urgent is outreach? Consider recent funding, pipeline progress, CDMO needs
 
 Return ONLY valid JSON:
 {{
     "website": "https://...",
+    "linkedin_company_page": "https://linkedin.com/company/...",
     "location": "City, Country",
     "company_size": "11-50",
+    "funding_stage": "Series B",
+    "total_funding_usd": 75000000,
     "latest_funding": "Series B - $50M - Jan 2024",
-    "pipeline_stage": "Phase 2",
+    "pipeline_stage": ["Phase 2"],
     "lead_programs": "ABC-123 (anti-CD20 mAb) for autoimmune diseases",
     "therapeutic_areas": ["Oncology", "Autoimmune"],
-    "focus_areas": ["mAbs", "Bispecifics"],
+    "technology_platforms": ["mAbs", "Bispecifics"],
     "manufacturing_status": "No Public Partner",
     "recent_news": "Recently announced positive Phase 2 data...",
     "icp_score": 65,
-    "icp_reasoning": "Mid-stage biotech with biologics focus, no public CDMO partner"
+    "icp_justification": "Mid-stage biotech with biologics focus, no public CDMO partner. Phase 2 data suggests upcoming manufacturing needs.",
+    "urgency_score": 75
 }}
 
 Return ONLY JSON."""
@@ -1433,51 +1441,87 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
-            # Update company record
+            # Update company record with all fields
             update_fields = {
-                'Enrichment Status': 'Enriched'
+                'Enrichment Status': 'Enriched',
+                'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d')
             }
             
+            # Basic fields
             if data.get('website'):
                 update_fields['Website'] = data['website']
+            if data.get('linkedin_company_page'):
+                update_fields['LinkedIn Company Page'] = data['linkedin_company_page']
             if data.get('location'):
                 update_fields['Location/HQ'] = data['location']
             if data.get('company_size'):
                 update_fields['Company Size'] = data['company_size']
+            
+            # Funding fields
+            if data.get('funding_stage'):
+                update_fields['Funding Stage'] = data['funding_stage']
+            if data.get('total_funding_usd'):
+                try:
+                    update_fields['Total Funding'] = float(data['total_funding_usd'])
+                except:
+                    pass
             if data.get('latest_funding'):
                 update_fields['Latest Funding Round'] = data['latest_funding']
+            
+            # Programs and notes
             if data.get('lead_programs'):
                 update_fields['Lead Programs'] = data['lead_programs']
             if data.get('recent_news'):
                 update_fields['Intelligence Notes'] = data['recent_news'][:1000]
-            if data.get('icp_score'):
-                update_fields['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
             if data.get('manufacturing_status'):
                 update_fields['Manufacturing Status'] = data['manufacturing_status']
+            
+            # Scores and justifications
+            if data.get('icp_score'):
+                update_fields['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
+            if data.get('icp_justification'):
+                update_fields['ICP Score Justification'] = data['icp_justification']
+            if data.get('urgency_score'):
+                update_fields['Urgency Score'] = min(max(int(data['urgency_score']), 0), 100)
             
             # Handle multi-select fields carefully
             try:
                 if data.get('therapeutic_areas'):
-                    update_fields['Therapeutic Areas'] = data['therapeutic_areas']
-                if data.get('focus_areas'):
-                    update_fields['Focus Area'] = data['focus_areas']
+                    areas = data['therapeutic_areas']
+                    if isinstance(areas, str):
+                        areas = [areas]
+                    update_fields['Therapeutic Areas'] = areas
+            except:
+                pass
+            
+            try:
+                if data.get('technology_platforms'):
+                    platforms = data['technology_platforms']
+                    if isinstance(platforms, str):
+                        platforms = [platforms]
+                    update_fields['Technology Platform'] = platforms
+            except:
+                pass
+            
+            try:
                 if data.get('pipeline_stage'):
-                    # Pipeline stage might be multiple values
                     stages = data['pipeline_stage']
                     if isinstance(stages, str):
                         stages = [stages]
                     update_fields['Pipeline Stage'] = stages
             except:
-                pass  # Skip multi-selects if they fail
+                pass
             
             # Update record
             try:
                 self.companies_table.update(company_id, update_fields)
+                logger.info(f"  ✓ Company enriched - ICP: {data.get('icp_score', 'N/A')}, Urgency: {data.get('urgency_score', 'N/A')}")
             except Exception as e:
                 # Try with minimal fields only
                 logger.debug(f"Full update failed: {e}")
                 minimal = {
-                    'Enrichment Status': 'Enriched'
+                    'Enrichment Status': 'Enriched',
+                    'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d')
                 }
                 if data.get('website'):
                     minimal['Website'] = data['website']
@@ -1489,7 +1533,6 @@ Return ONLY JSON."""
                     self.companies_table.update(company_id, minimal)
                 except Exception as e2:
                     logger.debug(f"Minimal update also failed: {e2}")
-                    # Last resort - just mark as enriched
                     self.companies_table.update(company_id, {'Enrichment Status': 'Enriched'})
             
             return data
@@ -1571,13 +1614,32 @@ Return ONLY JSON."""
                 pass
             
             # Calculate lead ICP based on title
-            lead_icp = self._calculate_lead_icp(data.get('title') or lead_title, company_icp)
+            lead_icp, lead_icp_justification = self._calculate_lead_icp_with_justification(
+                data.get('title') or lead_title, company_icp
+            )
             
-            # Update lead record
+            # Determine Lead ICP Tier
+            if lead_icp >= 80:
+                lead_icp_tier = "Tier 1 - High Priority"
+            elif lead_icp >= 60:
+                lead_icp_tier = "Tier 2 - Medium Priority"
+            elif lead_icp >= 40:
+                lead_icp_tier = "Tier 3 - Low Priority"
+            else:
+                lead_icp_tier = "Tier 4 - Monitor"
+            
+            # Calculate Combined Priority (average of lead ICP and company ICP)
+            combined_priority = int((lead_icp + company_icp) / 2)
+            
+            # Update lead record with all fields
             update_fields = {
                 'Enrichment Status': 'Enriched',
                 'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d'),
-                'Lead ICP Score': lead_icp
+                'Enrichment Confidence': data.get('email_confidence', 'Medium'),
+                'Lead ICP Score': lead_icp,
+                'Lead ICP Tier': lead_icp_tier,
+                'Lead ICP Justification': lead_icp_justification,
+                'Combined Priority': combined_priority
             }
             
             if data.get('email'):
@@ -1588,16 +1650,20 @@ Return ONLY JSON."""
                 update_fields['LinkedIn URL'] = data['linkedin_url']
             if data.get('location'):
                 update_fields['Location'] = data['location']
+            if data.get('recent_activity'):
+                update_fields['Intelligence Notes'] = data['recent_activity'][:1000]
             
             try:
                 self.leads_table.update(lead_id, update_fields)
+                logger.info(f"  ✓ Lead enriched - ICP: {lead_icp} ({lead_icp_tier})")
             except Exception as e:
                 logger.debug(f"Lead update error: {e}")
                 # Try minimal
                 try:
                     self.leads_table.update(lead_id, {
                         'Enrichment Status': 'Enriched',
-                        'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d')
+                        'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d'),
+                        'Lead ICP Score': lead_icp
                     })
                 except:
                     pass
@@ -1607,12 +1673,58 @@ Return ONLY JSON."""
                 'title': data.get('title') or lead_title,
                 'linkedin_url': data.get('linkedin_url') or linkedin_url,
                 'lead_icp': lead_icp,
-                'company_icp': company_icp
+                'company_icp': company_icp,
+                'combined_priority': combined_priority
             }
             
         except Exception as e:
             logger.error(f"Error in inline lead enrichment: {e}")
             return None
+    
+    def _calculate_lead_icp_with_justification(self, title: str, company_icp: int) -> tuple:
+        """Calculate lead ICP score with justification based on title and company ICP"""
+        if not title:
+            return 50, "No title provided - default score"
+        
+        title_lower = title.lower()
+        
+        # Title scoring
+        title_score = 50
+        title_reason = "Standard role"
+        
+        # High-value titles (70-90)
+        if any(t in title_lower for t in ['vp manufacturing', 'vp operations', 'head of cmc', 
+                                           'chief operating', 'coo', 'vp supply chain',
+                                           'head of manufacturing', 'svp operations']):
+            title_score = 85
+            title_reason = "Key decision maker for manufacturing/operations - highest priority"
+        elif any(t in title_lower for t in ['vp', 'vice president', 'head of', 'director']):
+            if any(f in title_lower for f in ['manufacturing', 'operations', 'cmc', 'supply', 'technical']):
+                title_score = 75
+                title_reason = "Senior leader in relevant functional area"
+            else:
+                title_score = 60
+                title_reason = "Senior leader, may influence CDMO decisions"
+        elif any(t in title_lower for t in ['ceo', 'chief executive', 'president', 'founder']):
+            title_score = 70
+            title_reason = "Top decision maker - strategic influence on partnerships"
+        elif any(t in title_lower for t in ['senior director', 'executive director']):
+            title_score = 70
+            title_reason = "Senior director level - significant influence"
+        elif 'director' in title_lower:
+            title_score = 60
+            title_reason = "Director level - involved in partner selection"
+        elif 'manager' in title_lower:
+            title_score = 45
+            title_reason = "Manager level - may influence but not decide"
+        
+        # Combine with company ICP (60% title, 40% company)
+        combined = int(title_score * 0.6 + company_icp * 0.4)
+        combined = min(max(combined, 0), 100)
+        
+        justification = f"Title score: {title_score}/100 ({title_reason}). Company ICP: {company_icp}/90. Combined (60% title + 40% company): {combined}/100"
+        
+        return combined, justification
     
     def _calculate_lead_icp(self, title: str, company_icp: int) -> int:
         """Calculate lead ICP score based on title and company ICP"""
@@ -1733,14 +1845,16 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
-            # Update lead record with outreach
-            outreach_update = {}
+            # Update lead record with outreach using correct field names
+            outreach_update = {
+                'Message Generated Date': datetime.now().strftime('%Y-%m-%d')
+            }
+            
+            if data.get('email_subject'):
+                outreach_update['Email Subject'] = data['email_subject']
             
             if data.get('email_message'):
-                email_full = data['email_message']
-                if data.get('email_subject'):
-                    email_full = f"Subject: {data['email_subject']}\n\n{email_full}"
-                outreach_update['General Outreach Email'] = email_full
+                outreach_update['Email Body'] = data['email_message']
             
             if data.get('linkedin_connection'):
                 outreach_update['LinkedIn Connection Request'] = data['linkedin_connection']
@@ -1748,11 +1862,11 @@ Return ONLY JSON."""
             if data.get('linkedin_short'):
                 outreach_update['LinkedIn Short Message'] = data['linkedin_short']
             
+            if data.get('linkedin_inmail_subject'):
+                outreach_update['LinkedIn InMail Subject'] = data['linkedin_inmail_subject']
+            
             if data.get('linkedin_inmail'):
-                inmail_full = data['linkedin_inmail']
-                if data.get('linkedin_inmail_subject'):
-                    inmail_full = f"Subject: {data['linkedin_inmail_subject']}\n\n{inmail_full}"
-                outreach_update['LinkedIn InMail'] = inmail_full
+                outreach_update['LinkedIn InMail Body'] = data['linkedin_inmail']
             
             if outreach_update:
                 try:
@@ -1768,7 +1882,7 @@ Return ONLY JSON."""
     
     def create_news_trigger(self, lead_id: str, company_id: str, 
                            article: Dict, analysis: Dict, trigger_info: Dict) -> Optional[str]:
-        """Create NEWS trigger event in Trigger History with article URL"""
+        """Create NEWS trigger event in Trigger History with article URL and outreach"""
         
         try:
             trigger_type = trigger_info.get('type', 'NEWS')
@@ -1806,13 +1920,29 @@ Return ONLY JSON."""
             if not outreach_angle:
                 outreach_angle = f"Follow up on news: {headline}"
             
+            # Determine timing recommendation based on trigger type and urgency
+            urgency = trigger_info.get('urgency', 'MEDIUM')
+            if urgency == 'HIGH':
+                timing_recommendation = "Reach out within 24-48 hours while news is fresh"
+            elif urgency == 'MEDIUM':
+                timing_recommendation = "Reach out within 1 week, reference the recent news"
+            else:
+                timing_recommendation = "Add to nurture sequence, reach out within 2 weeks"
+            
+            # Event date (article publication date or today)
+            event_date = article.get('published', datetime.now().strftime('%Y-%m-%d'))
+            if isinstance(event_date, str) and 'T' in event_date:
+                event_date = event_date.split('T')[0]
+            
             trigger_data = {
                 'Date Detected': datetime.now().strftime('%Y-%m-%d'),
+                'Event Date': event_date,
                 'Lead': [lead_id],
                 'Trigger Type': trigger_type,
-                'Urgency': trigger_info.get('urgency', 'MEDIUM'),
+                'Urgency': urgency,
                 'Description': description[:1000],
                 'Outreach Angle': outreach_angle[:500],
+                'Timing Recommendation': timing_recommendation,
                 'Status': 'New',
                 'Sources': sources_text
             }
@@ -1820,12 +1950,123 @@ Return ONLY JSON."""
             if company_id:
                 trigger_data['Company'] = [company_id]
             
+            # Generate trigger-specific outreach
+            trigger_outreach = self._generate_trigger_outreach(
+                lead_id=lead_id,
+                trigger_type=trigger_type,
+                headline=headline,
+                outreach_angle=outreach_angle
+            )
+            
+            if trigger_outreach:
+                if trigger_outreach.get('email_subject'):
+                    trigger_data['Email Subject'] = trigger_outreach['email_subject']
+                if trigger_outreach.get('email_body'):
+                    trigger_data['Email Body'] = trigger_outreach['email_body']
+                if trigger_outreach.get('linkedin_connection'):
+                    trigger_data['LinkedIn Connection Request'] = trigger_outreach['linkedin_connection']
+                if trigger_outreach.get('linkedin_short'):
+                    trigger_data['LinkedIn Short Message'] = trigger_outreach['linkedin_short']
+                trigger_data['Outreach Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+            
             record = self.trigger_history_table.create(trigger_data)
-            logger.info(f"  ✓ Created NEWS trigger ({trigger_type})")
+            logger.info(f"  ✓ Created NEWS trigger ({trigger_type}) with outreach")
             return record['id']
             
         except Exception as e:
             logger.error(f"Error creating trigger: {e}")
+            return None
+    
+    def _generate_trigger_outreach(self, lead_id: str, trigger_type: str, 
+                                   headline: str, outreach_angle: str) -> Optional[Dict]:
+        """Generate trigger-specific outreach messages"""
+        
+        # Get lead info
+        lead_name = "there"
+        lead_title = ""
+        company_name = ""
+        try:
+            lead_record = self.leads_table.get(lead_id)
+            lead_name = lead_record['fields'].get('Lead Name', 'there')
+            lead_title = lead_record['fields'].get('Title', '')
+            company_ids = lead_record['fields'].get('Company', [])
+            if company_ids:
+                company_record = self.companies_table.get(company_ids[0])
+                company_name = company_record['fields'].get('Company Name', '')
+        except:
+            pass
+        
+        # Get company profile for context
+        our_company = "European biologics CDMO"
+        if self.company_profile:
+            our_company = self.company_profile.get('Capabilities', our_company)
+        
+        prompt = f"""Generate trigger-specific outreach messages referencing recent news.
+
+NEWS HEADLINE: {headline}
+
+OUTREACH ANGLE: {outreach_angle}
+
+LEAD:
+Name: {lead_name}
+Title: {lead_title}
+Company: {company_name}
+
+YOUR COMPANY: {our_company}
+
+Generate 3 SHORT messages that reference this specific news:
+
+1. EMAIL (80-100 words):
+Subject: [Reference the news naturally]
+- Open by referencing the news
+- Connect to how you might help
+- Soft CTA
+- Sign: "Best regards, [Your Name]"
+
+2. LINKEDIN CONNECTION (150-180 chars):
+- Reference the news briefly
+- Why you'd like to connect
+
+3. LINKEDIN SHORT MESSAGE (200-300 chars):
+- Congratulate or reference the news
+- Brief mention of relevance
+- Sign: "Best regards, [Your Name]"
+
+Return ONLY valid JSON:
+{{
+    "email_subject": "Subject referencing news",
+    "email_body": "Email body",
+    "linkedin_connection": "Connection request",
+    "linkedin_short": "Short message"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            return json.loads(json_str.strip())
+            
+        except Exception as e:
+            logger.debug(f"Error generating trigger outreach: {e}")
             return None
     
     # =========================================================================
