@@ -475,7 +475,7 @@ class TriggerDigest:
         return html
     
     def send_email(self, html_content: str, trigger_count: int) -> bool:
-        """Send email via SendGrid"""
+        """Send email via SendGrid to one or multiple recipients"""
         
         if not self.sendgrid_api_key:
             logger.error("SENDGRID_API_KEY not set")
@@ -494,21 +494,25 @@ class TriggerDigest:
             else:
                 subject = "🎯 Trigger Digest: All Caught Up!"
             
-            message = Mail(
-                from_email=Email(self.from_email, "Lead Intelligence"),
-                to_emails=To(self.to_email),
-                subject=subject,
-                html_content=HtmlContent(html_content)
-            )
+            # Handle multiple recipients (comma-separated)
+            recipients = [email.strip() for email in self.to_email.split(',') if email.strip()]
             
-            response = sg.send(message)
+            for recipient in recipients:
+                message = Mail(
+                    from_email=Email(self.from_email, "Lead Intelligence"),
+                    to_emails=To(recipient),
+                    subject=subject,
+                    html_content=HtmlContent(html_content)
+                )
+                
+                response = sg.send(message)
+                
+                if response.status_code in [200, 201, 202]:
+                    logger.info(f"✓ Email sent successfully to {recipient}")
+                else:
+                    logger.error(f"Email send failed to {recipient}: {response.status_code}")
             
-            if response.status_code in [200, 201, 202]:
-                logger.info(f"✓ Email sent successfully to {self.to_email}")
-                return True
-            else:
-                logger.error(f"Email send failed: {response.status_code}")
-                return False
+            return True
                 
         except Exception as e:
             logger.error(f"Error sending email: {str(e)}")
@@ -520,8 +524,7 @@ class TriggerDigest:
         for trigger in triggers:
             try:
                 self.trigger_history_table.update(trigger['_id'], {
-                    'Status': 'Notified',
-                    'Notified Date': datetime.now().strftime('%Y-%m-%d')
+                    'Status': 'Notified'
                 })
             except Exception as e:
                 logger.warning(f"Could not update trigger status: {e}")
