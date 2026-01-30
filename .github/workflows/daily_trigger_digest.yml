@@ -1,0 +1,84 @@
+name: Daily Trigger Digest Email
+
+on:
+  schedule:
+    # Daily at 7 AM UTC (8 AM CET, 9 AM CEST)
+    - cron: '0 7 * * *'
+  
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Days to look back for triggers'
+        required: false
+        default: '1'
+      skip_if_empty:
+        description: 'Skip email if no triggers'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install pyairtable pyyaml sendgrid
+    
+    - name: Create config file
+      run: |
+        cat > config.yaml << EOF
+        airtable:
+          api_key: "${{ secrets.AIRTABLE_API_KEY }}"
+          base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
+          tables:
+            companies: "Companies"
+            leads: "Leads"
+        
+        anthropic:
+          api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
+        EOF
+    
+    - name: Send Daily Trigger Digest
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+        DIGEST_TO_EMAIL: ${{ secrets.DIGEST_TO_EMAIL }}
+        DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL || 'triggers@leadintelligence.io' }}
+        DIGEST_COMPANY_NAME: ${{ secrets.DIGEST_COMPANY_NAME || 'Lead Intelligence' }}
+      run: |
+        DAYS_BACK="${{ github.event.inputs.days_back || '1' }}"
+        SKIP_EMPTY="${{ github.event.inputs.skip_if_empty || 'false' }}"
+        
+        echo "============================================================"
+        echo "DAILY TRIGGER DIGEST"
+        echo "Looking back: $DAYS_BACK day(s)"
+        echo "Skip if empty: $SKIP_EMPTY"
+        echo "============================================================"
+        
+        if [ "$SKIP_EMPTY" == "true" ]; then
+          python daily_trigger_digest.py --days-back $DAYS_BACK --skip-if-empty
+        else
+          python daily_trigger_digest.py --days-back $DAYS_BACK
+        fi
+    
+    - name: Upload log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: trigger-digest-log-${{ github.run_id }}
+        path: trigger_digest.log
+        retention-days: 30
