@@ -1,11 +1,15 @@
 name: Competitor Enrichment
 
 on:
+  schedule:
+    # Bi-annual: Jan 15 and Jul 15 at 4 AM UTC
+    - cron: '0 4 15 1,7 *'
+  
   workflow_dispatch:
     inputs:
       mode:
         description: 'Run mode'
-        required: true
+        required: false
         default: 'unenriched'
         type: choice
         options:
@@ -16,9 +20,8 @@ on:
         description: 'Company name (only for specific mode)'
         required: false
       limit:
-        description: 'Limit number of companies'
+        description: 'Limit number of companies (leave empty for no limit on scheduled runs)'
         required: false
-        default: '10'
 
 jobs:
   enrich-competitors:
@@ -59,19 +62,27 @@ jobs:
         AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
         AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
       run: |
-        MODE="${{ github.event.inputs.mode }}"
-        LIMIT="${{ github.event.inputs.limit || '10' }}"
+        MODE="${{ github.event.inputs.mode || 'unenriched' }}"
+        LIMIT="${{ github.event.inputs.limit }}"
         COMPANY="${{ github.event.inputs.company_name }}"
         
         if [ "$MODE" == "all" ]; then
           echo "Enriching all competitors..."
-          python enrich_competitors.py --all --limit $LIMIT
+          if [ -n "$LIMIT" ]; then
+            python enrich_competitors.py --all --limit $LIMIT
+          else
+            python enrich_competitors.py --all
+          fi
         elif [ "$MODE" == "specific" ] && [ -n "$COMPANY" ]; then
           echo "Enriching specific company: $COMPANY"
           python enrich_competitors.py --company "$COMPANY"
         else
           echo "Enriching unenriched competitors..."
-          python enrich_competitors.py --limit $LIMIT
+          if [ -n "$LIMIT" ]; then
+            python enrich_competitors.py --limit $LIMIT
+          else
+            python enrich_competitors.py
+          fi
         fi
     
     - name: Upload logs
