@@ -1130,7 +1130,7 @@ Only return valid JSON."""
         self.intelligence_table.create(intelligence_record)
     
     def enrich_leads(self, status: str = "Not Enriched", limit: Optional[int] = None, 
-                     refresh: bool = False, refresh_months: int = 6):
+                     refresh: bool = False, refresh_months: int = 6, offset: int = 0):
         """
         Main enrichment workflow
         
@@ -1139,12 +1139,18 @@ Only return valid JSON."""
             limit: Max number of leads to process
             refresh: If True, re-enrich old leads or those with missing data
             refresh_months: Consider leads older than this many months for refresh (default: 6)
+            offset: Skip first N leads (for batch processing)
         """
         if refresh:
             logger.info(f"Refresh mode: Finding leads needing re-enrichment (>{refresh_months} months or missing data)")
             leads = self.get_leads_needing_refresh(months=refresh_months)
         else:
             leads = self.get_leads_to_enrich(status)
+        
+        # Apply offset first, then limit
+        if offset > 0:
+            leads = leads[offset:]
+            logger.info(f"Batch mode: skipping first {offset} leads")
         
         if limit:
             leads = leads[:limit]
@@ -1262,6 +1268,8 @@ def main():
                        help='Enrichment status to filter by (default: Not Enriched)')
     parser.add_argument('--limit', type=int, default=None,
                        help='Limit number of leads to process')
+    parser.add_argument('--offset', type=int, default=0,
+                       help='Skip first N leads (for batch processing)')
     parser.add_argument('--refresh', action='store_true',
                        help='Re-enrich leads that are 6+ months old or have missing data')
     parser.add_argument('--refresh-months', type=int, default=6,
@@ -1276,6 +1284,7 @@ def main():
         enricher.enrich_leads(
             status=args.status, 
             limit=args.limit,
+            offset=args.offset,
             refresh=args.refresh,
             refresh_months=args.refresh_months
         )
