@@ -376,7 +376,7 @@ class MarketNewsIntelligence:
         logger.info("MarketNewsIntelligence initialized")
         logger.info(f"  - {len(self.trigger_points)} trigger points loaded")
         logger.info(f"  - {len(self.competitors)} competitors tracked")
-        logger.info(f"  - {len(self.high_icp_companies)} high-ICP companies to monitor")
+        logger.info(f"  - {len(self.high_icp_companies)} companies to monitor (ICP>=30)")
         logger.info(f"  - Inline enrichment: ENABLED")
     
     def _init_table(self, table_name: str):
@@ -423,9 +423,9 @@ class MarketNewsIntelligence:
         return DEFAULT_COMPETITORS
     
     def _load_high_icp_companies(self) -> List[Dict]:
-        """Load companies with ICP > 50 for monitoring"""
+        """Load companies with ICP >= 30 for monitoring"""
         try:
-            records = self.companies_table.all(formula="{ICP Fit Score}>=50")
+            records = self.companies_table.all(formula="{ICP Fit Score}>=30")
             companies = []
             for r in records:
                 fields = r.get('fields', {})
@@ -794,7 +794,7 @@ YOUR COMPANY (Rezon Bio):
         
         # High-ICP companies to watch
         watch_companies = [c['name'] for c in self.high_icp_companies[:30]]
-        companies_ctx = f"COMPANIES TO MONITOR (ICP>50): {', '.join(watch_companies)}"
+        companies_ctx = f"COMPANIES TO MONITOR (ICP>=30): {', '.join(watch_companies)}"
         
         # Competitors
         competitor_names = [c.get('name', c.get('Company Name', '')) for c in self.competitors[:20]]
