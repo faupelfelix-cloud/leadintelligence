@@ -12,15 +12,26 @@ on:
           - 'Enrich Companies'
           - 'Enrich Leads'
           - 'Enrich Both (Companies + Leads)'
+          - 'Batch Enrich Companies (parallel)'
+          - 'Batch Enrich Leads (parallel)'
           - 'Validate Setup Only'
       limit:
-        description: 'Limit number of records (leave empty for all)'
+        description: 'Limit number of records per batch (default: 200)'
         required: false
         type: string
+        default: '200'
+      batch_number:
+        description: 'For batch mode: specific batch (0-9) or "all" for parallel'
+        required: false
+        type: string
+        default: 'all'
 
 jobs:
-  enrich:
+  # Single job for non-batch tasks
+  enrich-single:
+    if: github.event.inputs.task != 'Batch Enrich Companies (parallel)' && github.event.inputs.task != 'Batch Enrich Leads (parallel)'
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     
     steps:
     - name: Checkout code
@@ -29,7 +40,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -57,7 +68,7 @@ jobs:
           python enrich_companies.py --limit 5
           
         elif [ "$TASK" = "Enrich Companies" ]; then
-          if [ -n "$LIMIT" ]; then
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "200" ]; then
             echo "Enriching companies (limit: $LIMIT)..."
             python enrich_companies.py --limit $LIMIT
           else
@@ -66,7 +77,7 @@ jobs:
           fi
           
         elif [ "$TASK" = "Enrich Leads" ]; then
-          if [ -n "$LIMIT" ]; then
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "200" ]; then
             echo "Enriching leads (limit: $LIMIT)..."
             python enrich_leads.py --limit $LIMIT
           else
@@ -75,7 +86,7 @@ jobs:
           fi
           
         elif [ "$TASK" = "Enrich Both (Companies + Leads)" ]; then
-          if [ -n "$LIMIT" ]; then
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "200" ]; then
             echo "Enriching companies and leads (limit: $LIMIT each)..."
             python enrich_companies.py --limit $LIMIT
             python enrich_leads.py --limit $LIMIT
@@ -94,6 +105,156 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: enrichment-log
+        name: enrichment-log-${{ github.run_id }}
         path: enrichment.log
+        retention-days: 30
+
+  # Parallel batch processing for companies (2000+)
+  enrich-batch-companies:
+    if: github.event.inputs.task == 'Batch Enrich Companies (parallel)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    
+    steps:
+    - name: Check if this batch should run
+      id: check
+      run: |
+        REQUESTED_BATCH="${{ github.event.inputs.batch_number }}"
+        CURRENT_BATCH="${{ matrix.batch }}"
+        
+        if [ "$REQUESTED_BATCH" == "all" ] || [ -z "$REQUESTED_BATCH" ] || [ "$REQUESTED_BATCH" == "$CURRENT_BATCH" ]; then
+          echo "run=true" >> $GITHUB_OUTPUT
+          echo "Running batch $CURRENT_BATCH"
+        else
+          echo "run=false" >> $GITHUB_OUTPUT
+          echo "Skipping batch $CURRENT_BATCH (requested: $REQUESTED_BATCH)"
+        fi
+    
+    - name: Checkout code
+      if: steps.check.outputs.run == 'true'
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      if: steps.check.outputs.run == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      if: steps.check.outputs.run == 'true'
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      if: steps.check.outputs.run == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Run batch enrichment
+      if: steps.check.outputs.run == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        BATCH="${{ matrix.batch }}"
+        LIMIT="${{ github.event.inputs.limit || '200' }}"
+        OFFSET=$((BATCH * LIMIT))
+        
+        echo "============================================================"
+        echo "BATCH $BATCH: Processing companies $OFFSET to $((OFFSET + LIMIT - 1))"
+        echo "============================================================"
+        
+        python enrich_companies.py --limit $LIMIT --offset $OFFSET
+    
+    - name: Upload logs
+      if: always() && steps.check.outputs.run == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: enrichment-companies-batch-${{ matrix.batch }}-${{ github.run_id }}
+        path: |
+          *.log
+        retention-days: 30
+
+  # Parallel batch processing for leads (2000+)
+  enrich-batch-leads:
+    if: github.event.inputs.task == 'Batch Enrich Leads (parallel)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    
+    steps:
+    - name: Check if this batch should run
+      id: check
+      run: |
+        REQUESTED_BATCH="${{ github.event.inputs.batch_number }}"
+        CURRENT_BATCH="${{ matrix.batch }}"
+        
+        if [ "$REQUESTED_BATCH" == "all" ] || [ -z "$REQUESTED_BATCH" ] || [ "$REQUESTED_BATCH" == "$CURRENT_BATCH" ]; then
+          echo "run=true" >> $GITHUB_OUTPUT
+          echo "Running batch $CURRENT_BATCH"
+        else
+          echo "run=false" >> $GITHUB_OUTPUT
+          echo "Skipping batch $CURRENT_BATCH (requested: $REQUESTED_BATCH)"
+        fi
+    
+    - name: Checkout code
+      if: steps.check.outputs.run == 'true'
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      if: steps.check.outputs.run == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      if: steps.check.outputs.run == 'true'
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      if: steps.check.outputs.run == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Run batch enrichment
+      if: steps.check.outputs.run == 'true'
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        BATCH="${{ matrix.batch }}"
+        LIMIT="${{ github.event.inputs.limit || '200' }}"
+        OFFSET=$((BATCH * LIMIT))
+        
+        echo "============================================================"
+        echo "BATCH $BATCH: Processing leads $OFFSET to $((OFFSET + LIMIT - 1))"
+        echo "============================================================"
+        
+        python enrich_leads.py --limit $LIMIT --offset $OFFSET
+    
+    - name: Upload logs
+      if: always() && steps.check.outputs.run == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: enrichment-leads-batch-${{ matrix.batch }}-${{ github.run_id }}
+        path: |
+          *.log
         retention-days: 30
