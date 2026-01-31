@@ -764,9 +764,14 @@ Only return valid JSON, no other text."""
         
         self.intelligence_table.create(intelligence_record)
     
-    def enrich_companies(self, status: str = "Not Enriched", limit: Optional[int] = None):
+    def enrich_companies(self, status: str = "Not Enriched", limit: Optional[int] = None, offset: int = 0):
         """Main enrichment workflow"""
         companies = self.get_companies_to_enrich(status)
+        
+        # Apply offset first, then limit
+        if offset > 0:
+            companies = companies[offset:]
+            logger.info(f"Batch mode: skipping first {offset} companies")
         
         if limit:
             companies = companies[:limit]
@@ -865,6 +870,8 @@ def main():
                        help='Enrichment status to filter by (default: Not Enriched)')
     parser.add_argument('--limit', type=int, default=None,
                        help='Limit number of companies to process')
+    parser.add_argument('--offset', type=int, default=0,
+                       help='Skip first N companies (for batch processing)')
     parser.add_argument('--config', default='config.yaml',
                        help='Path to config file')
     
@@ -872,7 +879,7 @@ def main():
     
     try:
         enricher = CompanyEnricher(config_path=args.config)
-        enricher.enrich_companies(status=args.status, limit=args.limit)
+        enricher.enrich_companies(status=args.status, limit=args.limit, offset=args.offset)
     except FileNotFoundError:
         logger.error(f"Config file not found: {args.config}")
         sys.exit(1)
