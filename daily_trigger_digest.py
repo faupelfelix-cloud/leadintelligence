@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
 Daily Trigger Digest - Sends beautiful HTML email with new trigger events
+
+Structure:
+1. Categorized by SOURCE (News Intelligence, Conference, Campaign, etc.)
+2. Within each source: grouped by COMPANY
+3. Company header shows: ICP, Location, Clinical Phase, Focus Area, Trigger Types
+4. Source URL below company header
+5. Table of LEADS with their ICP and outreach message links
+6. Trigger summary and outreach angle
+7. Action buttons
 """
 
 import os
@@ -9,6 +18,7 @@ import yaml
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+from collections import defaultdict
 from pyairtable import Api
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email, To, Content, HtmlContent
@@ -43,23 +53,21 @@ class TriggerDigest:
         # SendGrid
         self.sendgrid_api_key = os.environ.get('SENDGRID_API_KEY', '')
         
-        # Email settings (can be overridden via environment variables)
+        # Email settings
         self.from_email = os.environ.get('DIGEST_FROM_EMAIL', 'triggers@leadintelligence.io')
         self.to_email = os.environ.get('DIGEST_TO_EMAIL', '')
-        self.company_name = os.environ.get('DIGEST_COMPANY_NAME', 'Your Company')
+        self.company_name = os.environ.get('DIGEST_COMPANY_NAME', 'Lead Intelligence')
         
         # Airtable base URL for direct links
         self.airtable_base_id = self.config['airtable']['base_id']
         
+        # Cache for company and lead data
+        self._company_cache = {}
+        self._lead_cache = {}
+        
         logger.info("TriggerDigest initialized")
     
-    def _get_airtable_record_url(self, table_name: str, record_id: str) -> str:
-        """Generate direct URL to Airtable record"""
-        # Airtable URL format: https://airtable.com/{baseId}/{tableId}/{recordId}
-        # We use a simplified format that redirects properly
-        return f"https://airtable.com/{self.airtable_base_id}/{table_name}/{record_id}"
-    
-    def _get_trigger_history_url(self, record_id: str) -> str:
+    def _get_trigger_url(self, record_id: str) -> str:
         """Generate URL to Trigger History record"""
         return f"https://airtable.com/{self.airtable_base_id}/tblTriggerHistory/{record_id}"
     
@@ -67,187 +75,328 @@ class TriggerDigest:
         """Generate URL to Lead record"""
         return f"https://airtable.com/{self.airtable_base_id}/tblLeads/{record_id}"
     
-    def get_new_triggers(self, days_back: int = 1) -> Dict[str, List[Dict]]:
-        """Get triggers that haven't been notified yet, organized by source"""
+    def _get_company_url(self, record_id: str) -> str:
+        """Generate URL to Company record"""
+        return f"https://airtable.com/{self.airtable_base_id}/tblCompanies/{record_id}"
+    
+    def _get_company_data(self, company_id: str) -> Dict:
+        """Get company data with caching"""
+        if company_id in self._company_cache:
+            return self._company_cache[company_id]
         
+        try:
+            company = self.companies_table.get(company_id)
+            data = {
+                'id': company_id,
+                'name': company['fields'].get('Company Name', 'Unknown'),
+                'icp': company['fields'].get('ICP Fit Score'),
+                'hq_country': company['fields'].get('HQ Country') or company['fields'].get('Headquarters Country') or company['fields'].get('Country', ''),
+                'clinical_phase': company['fields'].get('Clinical Phase') or company['fields'].get('Development Stage', ''),
+                'focus_area': company['fields'].get('Focus Area') or company['fields'].get('Therapeutic Focus') or company['fields'].get('Technology', ''),
+                'website': company['fields'].get('Website', '')
+            }
+            self._company_cache[company_id] = data
+            return data
+        except Exception as e:
+            logger.warning(f"Could not fetch company {company_id}: {e}")
+            return {'id': company_id, 'name': 'Unknown', 'icp': None, 'hq_country': '', 'clinical_phase': '', 'focus_area': ''}
+    
+    def _get_lead_data(self, lead_id: str) -> Dict:
+        """Get lead data with caching"""
+        if lead_id in self._lead_cache:
+            return self._lead_cache[lead_id]
+        
+        try:
+            lead = self.leads_table.get(lead_id)
+            data = {
+                'id': lead_id,
+                'name': lead['fields'].get('Lead Name', 'Unknown'),
+                'title': lead['fields'].get('Title') or lead['fields'].get('Job Title', ''),
+                'lead_icp': lead['fields'].get('Lead ICP'),
+                'combined_icp': lead['fields'].get('Combined ICP'),
+                'email_subject': lead['fields'].get('Email Subject', ''),
+                'email_body': lead['fields'].get('Email Body', ''),
+                'linkedin_message': lead['fields'].get('LinkedIn Message', '')
+            }
+            self._lead_cache[lead_id] = data
+            return data
+        except Exception as e:
+            logger.warning(f"Could not fetch lead {lead_id}: {e}")
+            return {'id': lead_id, 'name': 'Unknown', 'title': '', 'lead_icp': None, 'combined_icp': None}
+    
+    def _categorize_source(self, trigger: Dict) -> str:
+        """Determine the source category for a trigger"""
+        fields = trigger['fields']
+        source = fields.get('Source', '').lower()
+        trigger_type = fields.get('Trigger Type', '')
+        
+        if 'news' in source or 'market' in source:
+            return 'News Intelligence'
+        elif 'conference' in source or trigger_type in ['SPEAKING', 'CONFERENCE_ATTENDANCE']:
+            return 'Conference Monitor'
+        elif 'campaign' in source:
+            return 'Campaign Leads'
+        elif 'monitor' in source or 'surveillance' in source:
+            return 'Lead Monitoring'
+        elif trigger_type in ['FUNDING', 'PARTNERSHIP', 'ACQUISITION', 'EXPANSION', 'REGULATORY']:
+            return 'News Intelligence'
+        elif trigger_type in ['SPEAKING', 'CONFERENCE_ATTENDANCE', 'CONFERENCE']:
+            return 'Conference Monitor'
+        elif trigger_type in ['JOB_CHANGE', 'LINKEDIN_POST', 'CONTENT', 'HIRING']:
+            return 'Lead Monitoring'
+        else:
+            return 'Other'
+    
+    def get_new_triggers(self, days_back: int = 1) -> Dict[str, Dict[str, List[Dict]]]:
+        """
+        Get triggers organized by SOURCE -> COMPANY -> triggers
+        
+        Returns:
+            {
+                'News Intelligence': {
+                    'company_id_1': [trigger1, trigger2, ...],
+                    'company_id_2': [trigger3, ...],
+                },
+                'Conference Monitor': {...},
+                ...
+            }
+        """
         cutoff_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
         
         # Get all triggers
         all_triggers = self.trigger_history_table.all()
         
-        # Organize by source
-        triggers_by_source = {
-            'News Intelligence': [],
-            'Conference Monitor': [],
-            'Lead Monitoring': [],
-            'Other': []
-        }
+        # Structure: source -> company_id -> list of triggers
+        triggers_by_source_company = defaultdict(lambda: defaultdict(list))
         
         for trigger in all_triggers:
             fields = trigger['fields']
             
-            # Only include triggers that have NOT been notified yet
+            # Only include triggers that haven't been notified
             status = fields.get('Status', '')
-            
-            # Skip if already notified
             if status == 'Notified':
                 continue
             
-            # Include if Status is "New" or empty/other status
-            # This catches new triggers that haven't been processed yet
+            # Check if recent enough
             date_detected = fields.get('Date Detected', '')
-            
-            # Optionally filter by date (for very old unnotified triggers)
-            # If you want ALL unnotified triggers regardless of age, remove this check
             is_recent = date_detected >= cutoff_date if date_detected else True
             
-            if is_recent:
-                # Enrich with lead and company names
-                enriched = self._enrich_trigger(trigger)
-                
-                # Determine source based on trigger type or source field
-                source = fields.get('Source', '')
-                trigger_type = fields.get('Trigger Type', '')
-                
-                # Categorize by source
-                if 'news' in source.lower() or 'market' in source.lower():
-                    triggers_by_source['News Intelligence'].append(enriched)
-                elif 'conference' in source.lower() or trigger_type in ['SPEAKING', 'CONFERENCE_ATTENDANCE']:
-                    triggers_by_source['Conference Monitor'].append(enriched)
-                elif 'monitor' in source.lower() or 'surveillance' in source.lower():
-                    triggers_by_source['Lead Monitoring'].append(enriched)
-                else:
-                    # Try to infer from trigger type
-                    if trigger_type in ['FUNDING', 'PARTNERSHIP', 'ACQUISITION', 'EXPANSION', 'REGULATORY']:
-                        triggers_by_source['News Intelligence'].append(enriched)
-                    elif trigger_type in ['SPEAKING', 'CONFERENCE_ATTENDANCE', 'CONFERENCE']:
-                        triggers_by_source['Conference Monitor'].append(enriched)
-                    elif trigger_type in ['JOB_CHANGE', 'LINKEDIN_POST', 'CONTENT', 'HIRING']:
-                        triggers_by_source['Lead Monitoring'].append(enriched)
-                    else:
-                        triggers_by_source['Other'].append(enriched)
+            if not is_recent:
+                continue
+            
+            # Get source category
+            source = self._categorize_source(trigger)
+            
+            # Get company ID (use first if multiple)
+            company_ids = fields.get('Company', [])
+            company_id = company_ids[0] if company_ids else 'unknown'
+            
+            # Enrich trigger with additional data
+            trigger['_id'] = trigger['id']
+            trigger['_source_category'] = source
+            
+            # Get lead data for this trigger
+            lead_ids = fields.get('Lead', [])
+            trigger['_leads'] = []
+            for lid in lead_ids:
+                lead_data = self._get_lead_data(lid)
+                trigger['_leads'].append(lead_data)
+            
+            triggers_by_source_company[source][company_id].append(trigger)
         
-        # Sort each category by urgency (HIGH first) then by date
-        urgency_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
-        for source in triggers_by_source:
-            triggers_by_source[source].sort(key=lambda x: (
-                urgency_order.get(x['fields'].get('Urgency', 'LOW'), 3),
-                x['fields'].get('Date Detected', '9999')
-            ))
+        # Count totals for logging
+        total = sum(
+            len(triggers) 
+            for companies in triggers_by_source_company.values() 
+            for triggers in companies.values()
+        )
         
-        # Count total
-        total = sum(len(t) for t in triggers_by_source.values())
         logger.info(f"Found {total} new/recent triggers")
-        for source, triggers in triggers_by_source.items():
-            if triggers:
-                logger.info(f"  - {source}: {len(triggers)}")
+        for source, companies in triggers_by_source_company.items():
+            count = sum(len(t) for t in companies.values())
+            logger.info(f"  - {source}: {count} triggers across {len(companies)} companies")
         
-        return triggers_by_source
+        return dict(triggers_by_source_company)
     
-    def _enrich_trigger(self, trigger: Dict) -> Dict:
-        """Add lead and company names to trigger record"""
-        fields = trigger['fields']
-        
-        # Get lead name, ID, and ICP
-        lead_name = "Unknown"
-        lead_record_id = None
-        lead_icp = None
-        combined_icp = None
-        lead_ids = fields.get('Lead', [])
-        if lead_ids:
-            lead_record_id = lead_ids[0]
-            try:
-                lead = self.leads_table.get(lead_record_id)
-                lead_name = lead['fields'].get('Lead Name', 'Unknown')
-                lead_icp = lead['fields'].get('Lead ICP')
-                combined_icp = lead['fields'].get('Combined ICP')
-            except:
-                pass
-        
-        # Get company name, ICP, and HQ country
-        company_name = "Unknown"
-        company_icp = None
-        company_hq = None
-        company_ids = fields.get('Company', [])
-        if company_ids:
-            try:
-                company = self.companies_table.get(company_ids[0])
-                company_name = company['fields'].get('Company Name', 'Unknown')
-                company_icp = company['fields'].get('ICP Fit Score')
-                company_hq = company['fields'].get('HQ Country') or company['fields'].get('Headquarters Country') or company['fields'].get('Country')
-            except:
-                pass
-        
-        # Add to fields
-        trigger['fields']['_lead_name'] = lead_name
-        trigger['fields']['_company_name'] = company_name
-        trigger['fields']['_lead_record_id'] = lead_record_id
-        trigger['fields']['_lead_icp'] = lead_icp
-        trigger['fields']['_company_icp'] = company_icp
-        trigger['fields']['_combined_icp'] = combined_icp
-        trigger['fields']['_company_hq'] = company_hq
-        trigger['_id'] = trigger['id']
-        
-        return trigger
-    
-    def generate_html_email(self, triggers_by_source: Dict[str, List[Dict]]) -> str:
-        """Generate beautiful HTML email organized by source"""
+    def generate_html_email(self, triggers_by_source_company: Dict) -> str:
+        """Generate beautiful HTML email organized by source -> company -> leads table"""
         
         # Count totals
-        total_triggers = sum(len(t) for t in triggers_by_source.values())
+        total_triggers = 0
+        high_count = 0
+        medium_count = 0
+        low_count = 0
         
-        # Count by urgency across all sources
-        all_triggers = [t for triggers in triggers_by_source.values() for t in triggers]
-        high_count = len([t for t in all_triggers if t['fields'].get('Urgency') == 'HIGH'])
-        medium_count = len([t for t in all_triggers if t['fields'].get('Urgency') == 'MEDIUM'])
-        low_count = len([t for t in all_triggers if t['fields'].get('Urgency') == 'LOW'])
+        for companies in triggers_by_source_company.values():
+            for triggers in companies.values():
+                for t in triggers:
+                    total_triggers += 1
+                    urgency = t['fields'].get('Urgency', 'LOW')
+                    if urgency == 'HIGH':
+                        high_count += 1
+                    elif urgency == 'MEDIUM':
+                        medium_count += 1
+                    else:
+                        low_count += 1
         
-        # Source icons and colors
+        # Source styling
         source_config = {
             'News Intelligence': {'icon': '📰', 'color': '#0066cc', 'bg': '#e7f3ff'},
             'Conference Monitor': {'icon': '🎤', 'color': '#6f42c1', 'bg': '#f3e8ff'},
+            'Campaign Leads': {'icon': '🎯', 'color': '#20c997', 'bg': '#e6fff9'},
             'Lead Monitoring': {'icon': '👁️', 'color': '#fd7e14', 'bg': '#fff3e0'},
             'Other': {'icon': '📋', 'color': '#6c757d', 'bg': '#f8f9fa'}
         }
         
-        # Generate sections for each source
+        # Generate source sections
         source_sections = ""
-        for source_name, triggers in triggers_by_source.items():
-            if not triggers:
+        
+        for source_name in ['News Intelligence', 'Conference Monitor', 'Campaign Leads', 'Lead Monitoring', 'Other']:
+            if source_name not in triggers_by_source_company:
+                continue
+            
+            companies = triggers_by_source_company[source_name]
+            if not companies:
                 continue
             
             config = source_config.get(source_name, source_config['Other'])
             
-            # Generate trigger cards for this source
-            trigger_cards = self._generate_trigger_cards(triggers)
-            
+            # Source header
+            source_trigger_count = sum(len(t) for t in companies.values())
             source_sections += f"""
-            <!-- {source_name} Section -->
             <tr>
-                <td style="padding: 20px 20px 10px 20px;">
-                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: {config['bg']}; border-radius: 8px; border-left: 4px solid {config['color']};">
+                <td style="background-color: {config['color']}; padding: 15px 20px; color: white;">
+                    <span style="font-size: 20px; margin-right: 10px;">{config['icon']}</span>
+                    <span style="font-size: 18px; font-weight: 600;">{source_name}</span>
+                    <span style="float: right; background: rgba(255,255,255,0.2); padding: 4px 12px; border-radius: 20px; font-size: 14px;">
+                        {source_trigger_count} trigger{'s' if source_trigger_count != 1 else ''}
+                    </span>
+                </td>
+            </tr>
+            """
+            
+            # Company cards within this source
+            for company_id, triggers in companies.items():
+                company_data = self._get_company_data(company_id) if company_id != 'unknown' else {
+                    'name': 'Unknown Company', 'icp': None, 'hq_country': '', 'clinical_phase': '', 'focus_area': ''
+                }
+                
+                # Collect all trigger types for this company
+                trigger_types = list(set(t['fields'].get('Trigger Type', 'OTHER') for t in triggers))
+                
+                # Collect all leads across triggers for this company
+                all_leads = {}
+                for trigger in triggers:
+                    for lead in trigger.get('_leads', []):
+                        if lead['id'] not in all_leads:
+                            all_leads[lead['id']] = {
+                                'data': lead,
+                                'triggers': []
+                            }
+                        all_leads[lead['id']]['triggers'].append(trigger)
+                
+                # Get source URL (from first trigger)
+                source_url = triggers[0]['fields'].get('Source URL', '') or triggers[0]['fields'].get('Article URL', '')
+                
+                # Get urgency (highest among triggers)
+                urgencies = [t['fields'].get('Urgency', 'LOW') for t in triggers]
+                if 'HIGH' in urgencies:
+                    max_urgency = 'HIGH'
+                    urgency_color = '#dc3545'
+                elif 'MEDIUM' in urgencies:
+                    max_urgency = 'MEDIUM'
+                    urgency_color = '#fd7e14'
+                else:
+                    max_urgency = 'LOW'
+                    urgency_color = '#28a745'
+                
+                # Company card
+                source_sections += f"""
+            <tr>
+                <td style="padding: 15px 20px; border-bottom: 1px solid #eee;">
+                    <!-- Company Header -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border-radius: 12px; border: 1px solid #e0e0e0; overflow: hidden;">
                         <tr>
-                            <td style="padding: 15px 20px;">
-                                <span style="font-size: 24px; margin-right: 10px;">{config['icon']}</span>
-                                <span style="font-size: 18px; font-weight: bold; color: {config['color']};">{source_name}</span>
-                                <span style="display: inline-block; padding: 4px 10px; background-color: {config['color']}; color: white; border-radius: 12px; font-size: 12px; font-weight: bold; margin-left: 10px;">
-                                    {len(triggers)} trigger{'s' if len(triggers) != 1 else ''}
-                                </span>
+                            <td style="padding: 20px;">
+                                <!-- Company Name & Urgency -->
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td>
+                                            <span style="font-size: 20px; font-weight: 700; color: #333;">
+                                                🏢 {company_data['name']}
+                                            </span>
+                                        </td>
+                                        <td style="text-align: right;">
+                                            <span style="display: inline-block; padding: 4px 12px; background-color: {urgency_color}; color: white; border-radius: 20px; font-size: 12px; font-weight: bold;">
+                                                {max_urgency}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </table>
+                                
+                                <!-- Company Details Row -->
+                                <div style="margin-top: 12px; font-size: 13px; color: #666;">
+                                    {f'<span style="margin-right: 15px;">📊 <strong>ICP:</strong> {int(company_data["icp"])}</span>' if company_data['icp'] else ''}
+                                    {f'<span style="margin-right: 15px;">📍 {company_data["hq_country"]}</span>' if company_data['hq_country'] else ''}
+                                    {f'<span style="margin-right: 15px;">🧪 {company_data["clinical_phase"]}</span>' if company_data['clinical_phase'] else ''}
+                                    {f'<span style="margin-right: 15px;">🎯 {company_data["focus_area"]}</span>' if company_data['focus_area'] else ''}
+                                </div>
+                                
+                                <!-- Trigger Types -->
+                                <div style="margin-top: 10px;">
+                                    {' '.join([f'<span style="display: inline-block; padding: 3px 10px; background-color: #e9ecef; color: #495057; border-radius: 15px; font-size: 11px; margin-right: 5px; margin-bottom: 5px;">{tt}</span>' for tt in trigger_types])}
+                                </div>
+                                
+                                <!-- Source URL -->
+                                {f'<div style="margin-top: 12px; font-size: 12px;"><a href="{source_url}" style="color: #0066cc; text-decoration: none;">🔗 {source_url[:60]}{"..." if len(source_url) > 60 else ""}</a></div>' if source_url else ''}
+                            </td>
+                        </tr>
+                        
+                        <!-- Leads Table -->
+                        <tr>
+                            <td style="padding: 0 20px 15px 20px;">
+                                <table width="100%" cellpadding="0" cellspacing="0" style="border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden; font-size: 13px;">
+                                    <tr style="background-color: #f8f9fa;">
+                                        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6; font-weight: 600; color: #495057;">Lead</th>
+                                        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #dee2e6; font-weight: 600; color: #495057;">Title</th>
+                                        <th style="padding: 10px; text-align: center; border-bottom: 1px solid #dee2e6; font-weight: 600; color: #495057;">ICP</th>
+                                        <th style="padding: 10px; text-align: center; border-bottom: 1px solid #dee2e6; font-weight: 600; color: #495057;">Outreach</th>
+                                    </tr>
+                                    {self._generate_leads_rows(all_leads)}
+                                </table>
+                            </td>
+                        </tr>
+                        
+                        <!-- Trigger Summary & Outreach Angle -->
+                        <tr>
+                            <td style="padding: 0 20px 15px 20px;">
+                                {self._generate_trigger_summaries(triggers)}
+                            </td>
+                        </tr>
+                        
+                        <!-- Action Buttons -->
+                        <tr>
+                            <td style="padding: 0 20px 20px 20px;">
+                                <table cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td style="padding-right: 8px;">
+                                            <a href="{self._get_company_url(company_id)}" style="display: inline-block; padding: 10px 16px; background-color: #667eea; color: white; text-decoration: none; border-radius: 6px; font-size: 12px; font-weight: 500;">
+                                                🏢 View Company
+                                            </a>
+                                        </td>
+                                        <td style="padding-right: 8px;">
+                                            <a href="{self._get_trigger_url(triggers[0]['_id'])}" style="display: inline-block; padding: 10px 16px; background-color: #28a745; color: white; text-decoration: none; border-radius: 6px; font-size: 12px; font-weight: 500;">
+                                                📋 View Trigger
+                                            </a>
+                                        </td>
+                                    </tr>
+                                </table>
                             </td>
                         </tr>
                     </table>
                 </td>
             </tr>
-            
-            <!-- Trigger Cards for {source_name} -->
-            <tr>
-                <td style="padding: 0 20px 20px 20px;">
-                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; border: 1px solid #eee;">
-                        {trigger_cards}
-                    </table>
-                </td>
-            </tr>
-            """
+                """
         
         # Full HTML template
         html = f"""
@@ -261,7 +410,7 @@ class TriggerDigest:
     <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 20px 0;">
         <tr>
             <td align="center">
-                <table width="650" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                <table width="700" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                     
                     <!-- Header -->
                     <tr>
@@ -277,23 +426,23 @@ class TriggerDigest:
                     
                     <!-- Summary Stats -->
                     <tr>
-                        <td style="padding: 20px; background-color: #f8f9fa;">
+                        <td style="padding: 20px;">
                             <table width="100%" cellpadding="0" cellspacing="0">
                                 <tr>
                                     <td width="25%" style="text-align: center; padding: 15px;">
-                                        <div style="font-size: 36px; font-weight: bold; color: #333;">{total_triggers}</div>
-                                        <div style="font-size: 12px; color: #666; margin-top: 4px; text-transform: uppercase;">Total</div>
+                                        <div style="font-size: 32px; font-weight: bold; color: #333;">{total_triggers}</div>
+                                        <div style="font-size: 12px; color: #666; margin-top: 4px;">Total</div>
                                     </td>
-                                    <td width="25%" style="text-align: center; padding: 15px; border-left: 1px solid #ddd;">
-                                        <div style="font-size: 28px; font-weight: bold; color: #dc3545;">{high_count}</div>
+                                    <td width="25%" style="text-align: center; padding: 15px; border-left: 1px solid #eee;">
+                                        <div style="font-size: 32px; font-weight: bold; color: #dc3545;">{high_count}</div>
                                         <div style="font-size: 12px; color: #666; margin-top: 4px;">🔴 High</div>
                                     </td>
-                                    <td width="25%" style="text-align: center; padding: 15px; border-left: 1px solid #ddd;">
-                                        <div style="font-size: 28px; font-weight: bold; color: #fd7e14;">{medium_count}</div>
+                                    <td width="25%" style="text-align: center; padding: 15px; border-left: 1px solid #eee;">
+                                        <div style="font-size: 32px; font-weight: bold; color: #fd7e14;">{medium_count}</div>
                                         <div style="font-size: 12px; color: #666; margin-top: 4px;">🟡 Medium</div>
                                     </td>
-                                    <td width="25%" style="text-align: center; padding: 15px; border-left: 1px solid #ddd;">
-                                        <div style="font-size: 28px; font-weight: bold; color: #28a745;">{low_count}</div>
+                                    <td width="25%" style="text-align: center; padding: 15px; border-left: 1px solid #eee;">
+                                        <div style="font-size: 32px; font-weight: bold; color: #28a745;">{low_count}</div>
                                         <div style="font-size: 12px; color: #666; margin-top: 4px;">🟢 Low</div>
                                     </td>
                                 </tr>
@@ -301,7 +450,7 @@ class TriggerDigest:
                         </td>
                     </tr>
                     
-                    <!-- Source Sections -->
+                    <!-- Source Sections with Company Cards -->
                     {source_sections}
                     
                     <!-- Footer -->
@@ -325,130 +474,104 @@ class TriggerDigest:
 """
         return html
     
-    def _generate_trigger_cards(self, triggers: List[Dict]) -> str:
-        """Generate HTML for trigger cards"""
+    def _generate_leads_rows(self, all_leads: Dict) -> str:
+        """Generate table rows for leads"""
+        rows = ""
         
-        trigger_rows = ""
-        for trigger in triggers:
-            fields = trigger['fields']
-            urgency = fields.get('Urgency', 'LOW')
+        for lead_id, lead_info in all_leads.items():
+            lead = lead_info['data']
+            triggers = lead_info['triggers']
             
-            # Urgency colors and icons
-            if urgency == 'HIGH':
-                urgency_color = '#dc3545'
-                urgency_bg = '#fff5f5'
-                urgency_icon = '🔴'
-            elif urgency == 'MEDIUM':
-                urgency_color = '#fd7e14'
-                urgency_bg = '#fff8f0'
-                urgency_icon = '🟡'
-            else:
-                urgency_color = '#28a745'
-                urgency_bg = '#f0fff4'
-                urgency_icon = '🟢'
+            # Check if lead has outreach messages
+            has_email = bool(lead.get('email_subject') or lead.get('email_body'))
+            has_linkedin = bool(lead.get('linkedin_message'))
             
-            trigger_type = fields.get('Trigger Type', 'OTHER')
-            lead_name = fields.get('_lead_name', 'Unknown')
-            company_name = fields.get('_company_name', 'Unknown')
-            description = fields.get('Description', 'No description')
-            outreach_angle = fields.get('Outreach Angle', '')
-            timing = fields.get('Timing Recommendation', '')
-            event_date = fields.get('Event Date', '')
+            # Also check trigger-specific outreach
+            for t in triggers:
+                if t['fields'].get('Email Subject') or t['fields'].get('Email Body'):
+                    has_email = True
+                if t['fields'].get('LinkedIn Message'):
+                    has_linkedin = True
             
-            # Get ICP scores and HQ
-            lead_icp = fields.get('_lead_icp')
-            company_icp = fields.get('_company_icp')
-            combined_icp = fields.get('_combined_icp')
-            company_hq = fields.get('_company_hq', '')
+            # ICP display
+            icp_display = ''
+            if lead.get('combined_icp'):
+                icp_display = f"{int(lead['combined_icp'])}"
+            elif lead.get('lead_icp'):
+                icp_display = f"{int(lead['lead_icp'])}"
             
-            # Format ICP display
-            icp_display = []
-            if company_icp is not None:
-                icp_display.append(f"Co: {int(company_icp)}")
-            if lead_icp is not None:
-                icp_display.append(f"Lead: {int(lead_icp)}")
-            if combined_icp is not None:
-                icp_display.append(f"Combined: {int(combined_icp)}")
-            icp_text = " | ".join(icp_display) if icp_display else ""
+            # Outreach buttons
+            outreach_buttons = ""
+            if has_email:
+                outreach_buttons += f'<a href="{self._get_lead_url(lead_id)}" style="display: inline-block; padding: 4px 8px; background-color: #0066cc; color: white; text-decoration: none; border-radius: 4px; font-size: 10px; margin-right: 4px;">✉️</a>'
+            if has_linkedin:
+                outreach_buttons += f'<a href="{self._get_lead_url(lead_id)}" style="display: inline-block; padding: 4px 8px; background-color: #0077b5; color: white; text-decoration: none; border-radius: 4px; font-size: 10px;">in</a>'
+            if not outreach_buttons:
+                outreach_buttons = '<span style="color: #999;">-</span>'
             
-            # Get record IDs for links
-            trigger_record_id = trigger.get('_id', '')
-            lead_record_id = fields.get('_lead_record_id', '')
-            
-            # Generate Airtable URLs
-            trigger_url = self._get_trigger_history_url(trigger_record_id) if trigger_record_id else '#'
-            lead_url = self._get_lead_url(lead_record_id) if lead_record_id else '#'
-            
-            # Check if outreach messages exist
-            has_email = bool(fields.get('Email Subject') or fields.get('Email Body'))
-            
-            # Build action buttons
-            action_buttons = f"""
+            rows += f"""
                 <tr>
-                    <td colspan="2" style="padding-top: 16px;">
-                        <table cellpadding="0" cellspacing="0">
-                            <tr>
-                                <td style="padding-right: 8px;">
-                                    <a href="{trigger_url}" style="display: inline-block; padding: 10px 16px; background-color: #667eea; color: white; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500;">
-                                        📋 View Trigger
-                                    </a>
-                                </td>
-                                <td style="padding-right: 8px;">
-                                    <a href="{lead_url}" style="display: inline-block; padding: 10px 16px; background-color: #28a745; color: white; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500;">
-                                        👤 View Lead
-                                    </a>
-                                </td>
-                                {"<td><a href='" + trigger_url + "' style='display: inline-block; padding: 10px 16px; background-color: #0066cc; color: white; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: 500;'>✉️ Email Draft</a></td>" if has_email else ""}
-                            </tr>
-                        </table>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0;">
+                        <a href="{self._get_lead_url(lead_id)}" style="color: #333; text-decoration: none; font-weight: 500;">{lead['name']}</a>
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; color: #666;">{lead.get('title', '')[:30]}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                        {f'<span style="background-color: #e7f3ff; padding: 2px 8px; border-radius: 10px; font-weight: 600;">{icp_display}</span>' if icp_display else '-'}
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; text-align: center;">
+                        {outreach_buttons}
                     </td>
                 </tr>
             """
-
-            trigger_rows += f"""
-            <tr>
-                <td style="padding: 20px; border-bottom: 1px solid #eee;">
-                    <table width="100%" cellpadding="0" cellspacing="0">
-                        <tr>
-                            <td>
-                                <span style="display: inline-block; padding: 4px 12px; background-color: {urgency_color}; color: white; border-radius: 20px; font-size: 12px; font-weight: bold;">
-                                    {urgency_icon} {urgency}
-                                </span>
-                                <span style="display: inline-block; padding: 4px 12px; background-color: #6c757d; color: white; border-radius: 20px; font-size: 12px; margin-left: 8px;">
-                                    {trigger_type}
-                                </span>
-                            </td>
-                            <td style="text-align: right; color: #666; font-size: 13px;">
-                                {event_date}
-                            </td>
-                        </tr>
-                        <tr>
-                            <td colspan="2" style="padding-top: 12px;">
-                                <div style="font-size: 18px; font-weight: bold; color: #333;">
-                                    {lead_name}
-                                </div>
-                                <div style="font-size: 14px; color: #666; margin-top: 4px;">
-                                    {company_name}{f' • 📍 {company_hq}' if company_hq else ''}
-                                </div>
-                                {"<div style='font-size: 12px; color: #888; margin-top: 6px; padding: 4px 8px; background-color: #f0f0f0; border-radius: 4px; display: inline-block;'>📊 ICP: " + icp_text + "</div>" if icp_text else ""}
-                            </td>
-                        </tr>
-                        <tr>
-                            <td colspan="2" style="padding-top: 12px;">
-                                <div style="font-size: 14px; color: #333; line-height: 1.5;">
-                                    {description}
-                                </div>
-                            </td>
-                        </tr>
-                        {"<tr><td colspan='2' style='padding-top: 12px;'><div style='background-color: #e7f3ff; padding: 12px; border-radius: 8px; border-left: 4px solid #0066cc;'><strong style='color: #0066cc;'>💡 Outreach Angle:</strong><br><span style='color: #333;'>" + outreach_angle + "</span></div></td></tr>" if outreach_angle else ""}
-                        {"<tr><td colspan='2' style='padding-top: 8px;'><div style='font-size: 13px; color: #666;'>⏰ <strong>Timing:</strong> " + timing + "</div></td></tr>" if timing else ""}
-                        {action_buttons}
-                    </table>
-                </td>
-            </tr>
+        
+        if not rows:
+            rows = '<tr><td colspan="4" style="padding: 15px; text-align: center; color: #999; font-style: italic;">No specific leads linked</td></tr>'
+        
+        return rows
+    
+    def _generate_trigger_summaries(self, triggers: List[Dict]) -> str:
+        """Generate trigger summary and outreach angle sections"""
+        
+        # Combine descriptions and outreach angles from all triggers
+        descriptions = []
+        outreach_angles = []
+        
+        for t in triggers:
+            desc = t['fields'].get('Description', '')
+            if desc and desc not in descriptions:
+                descriptions.append(desc)
+            
+            angle = t['fields'].get('Outreach Angle', '')
+            if angle and angle not in outreach_angles:
+                outreach_angles.append(angle)
+        
+        html = ""
+        
+        # Description
+        if descriptions:
+            combined_desc = descriptions[0][:500] + ('...' if len(descriptions[0]) > 500 else '')
+            if len(descriptions) > 1:
+                combined_desc += f" (+{len(descriptions)-1} more)"
+            
+            html += f"""
+                <div style="background-color: #f8f9fa; padding: 12px; border-radius: 8px; margin-bottom: 10px;">
+                    <div style="font-size: 11px; font-weight: 600; color: #666; margin-bottom: 6px;">📝 TRIGGER SUMMARY</div>
+                    <div style="font-size: 13px; color: #333; line-height: 1.5;">{combined_desc}</div>
+                </div>
             """
         
-        return trigger_rows
+        # Outreach angle
+        if outreach_angles:
+            combined_angle = outreach_angles[0][:300] + ('...' if len(outreach_angles[0]) > 300 else '')
+            
+            html += f"""
+                <div style="background-color: #e7f3ff; padding: 12px; border-radius: 8px; border-left: 4px solid #0066cc;">
+                    <div style="font-size: 11px; font-weight: 600; color: #0066cc; margin-bottom: 6px;">💡 OUTREACH ANGLE</div>
+                    <div style="font-size: 13px; color: #333; line-height: 1.5;">{combined_angle}</div>
+                </div>
+            """
+        
+        return html
     
     def generate_no_triggers_email(self) -> str:
         """Generate email when there are no new triggers"""
@@ -555,16 +678,18 @@ class TriggerDigest:
             logger.error(f"Error sending email: {str(e)}")
             return False
     
-    def mark_triggers_as_notified(self, triggers: List[Dict]):
+    def mark_triggers_as_notified(self, triggers_by_source_company: Dict):
         """Update trigger status to 'Notified' after sending email"""
         
-        for trigger in triggers:
-            try:
-                self.trigger_history_table.update(trigger['_id'], {
-                    'Status': 'Notified'
-                })
-            except Exception as e:
-                logger.warning(f"Could not update trigger status: {e}")
+        for companies in triggers_by_source_company.values():
+            for triggers in companies.values():
+                for trigger in triggers:
+                    try:
+                        self.trigger_history_table.update(trigger['_id'], {
+                            'Status': 'Notified'
+                        })
+                    except Exception as e:
+                        logger.warning(f"Could not update trigger status: {e}")
     
     def run(self, days_back: int = 1, skip_if_empty: bool = False, mark_notified: bool = True):
         """Main workflow"""
@@ -574,12 +699,15 @@ class TriggerDigest:
         logger.info(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         logger.info("=" * 60)
         
-        # Get new triggers organized by source
-        triggers_by_source = self.get_new_triggers(days_back=days_back)
+        # Get new triggers organized by source -> company
+        triggers_by_source_company = self.get_new_triggers(days_back=days_back)
         
-        # Calculate total
-        total_triggers = sum(len(t) for t in triggers_by_source.values())
-        all_triggers = [t for triggers in triggers_by_source.values() for t in triggers]
+        # Count total triggers
+        total_triggers = sum(
+            len(triggers) 
+            for companies in triggers_by_source_company.values() 
+            for triggers in companies.values()
+        )
         
         # Skip sending if no triggers and skip_if_empty is True
         if total_triggers == 0 and skip_if_empty:
@@ -588,7 +716,7 @@ class TriggerDigest:
         
         # Generate email content
         if total_triggers > 0:
-            html_content = self.generate_html_email(triggers_by_source)
+            html_content = self.generate_html_email(triggers_by_source_company)
         else:
             html_content = self.generate_no_triggers_email()
         
@@ -596,9 +724,9 @@ class TriggerDigest:
         success = self.send_email(html_content, total_triggers)
         
         # Mark triggers as notified
-        if success and all_triggers and mark_notified:
+        if success and total_triggers > 0 and mark_notified:
             logger.info("Marking triggers as notified...")
-            self.mark_triggers_as_notified(all_triggers)
+            self.mark_triggers_as_notified(triggers_by_source_company)
         
         logger.info("=" * 60)
         logger.info("DIGEST COMPLETE")
