@@ -714,6 +714,7 @@ Search and assess now."""
                 'Lead': [lead_id],
                 'Company': [company_id],  # Link company
                 'Trigger Type': 'CONFERENCE_ATTENDANCE',
+                'Trigger Source': 'Conference Monitor',  # New standardized field
                 'Conference Name': conference_name,  # Add conference name
                 'Urgency': 'HIGH',
                 'Description': description,
