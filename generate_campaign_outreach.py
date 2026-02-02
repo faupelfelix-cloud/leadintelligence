@@ -245,6 +245,94 @@ class CampaignLeadsProcessor:
         
         return None
     
+    def _quick_prescreen_company(self, company_name: str) -> Optional[Dict]:
+        """
+        Quick pre-screen to check if company is a potential customer or should be excluded.
+        Uses a lightweight web search to classify the company BEFORE creating any records.
+        
+        This saves expensive full enrichment API calls for non-relevant companies.
+        
+        Returns:
+            Dict with 'is_excluded' (bool) and 'reason' (str) if excluded
+            Dict with 'is_excluded': False and 'company_type' if OK
+            None if pre-screen failed (will proceed with caution)
+        """
+        prompt = f"""Quickly classify this company for a biologics CDMO's sales targeting:
+
+COMPANY: {company_name}
+
+Determine if this is:
+1. POTENTIAL CUSTOMER: Biotech/pharma developing biologics (mAbs, bispecifics, ADCs, therapeutic proteins)
+2. COMPETITOR: CDMO, CMO, or contract manufacturer (Lonza, WuXi, Catalent, Samsung Biologics, etc.)
+3. SERVICE PROVIDER: CRO, consulting firm, equipment/reagent supplier, diagnostics company
+4. NON-TARGET: Cell/gene therapy company, small molecule pharma, medical device company
+
+Return ONLY valid JSON:
+{{
+    "company_type": "biotech|pharma|cdmo|cmo|cro|consulting|equipment|diagnostics|cell_therapy|gene_therapy|other",
+    "is_potential_customer": true/false,
+    "confidence": "high|medium|low",
+    "brief_reason": "One sentence explanation"
+}}
+
+Return ONLY JSON, no other text."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=500,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            # Parse JSON
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                logger.warning(f"    Pre-screen: no JSON in response, proceeding with caution")
+                return None
+            
+            data = json.loads(json_str.strip())
+            
+            is_potential_customer = data.get('is_potential_customer', False)
+            company_type = data.get('company_type', 'unknown')
+            confidence = data.get('confidence', 'low')
+            reason = data.get('brief_reason', '')
+            
+            # Excluded types
+            excluded_types = ['cdmo', 'cmo', 'cro', 'consulting', 'equipment', 
+                            'diagnostics', 'cell_therapy', 'gene_therapy']
+            
+            if not is_potential_customer or company_type in excluded_types:
+                return {
+                    'is_excluded': True,
+                    'reason': f"{company_type.upper()}: {reason}",
+                    'company_type': company_type,
+                    'confidence': confidence
+                }
+            
+            logger.info(f"    Pre-screen: {company_type} ({confidence} confidence)")
+            return {
+                'is_excluded': False,
+                'company_type': company_type,
+                'confidence': confidence,
+                'reason': reason
+            }
+            
+        except Exception as e:
+            logger.warning(f"    Pre-screen failed: {e} - proceeding with caution")
+            return None
+    
     def create_minimal_company(self, company_name: str) -> Optional[str]:
         """Create a minimal company record for enrichment"""
         try:
@@ -1280,9 +1368,38 @@ Return ONLY valid JSON:
                 
                 if company_data:
                     logger.info(f"  ✓ Found existing company (ICP: {company_data.get('ICP Fit Score', 'N/A')})")
+                    
+                    # Check if existing company is excluded
+                    existing_icp = company_data.get('ICP Fit Score', 0) or 0
+                    if existing_icp == 0:
+                        logger.warning(f"  ⚠ Existing company has ICP=0, skipping")
+                        try:
+                            self.campaign_leads_table.update(record_id, {
+                                'Processing Notes': "EXCLUDED: Existing company has ICP=0",
+                                'Enrich': False
+                            })
+                        except:
+                            pass
+                        continue
                 else:
-                    # Create and enrich company
-                    logger.info(f"  ○ Company not found - creating and enriching...")
+                    # ========== QUICK PRE-SCREEN (before creating record) ==========
+                    logger.info(f"  ○ Company not found - running quick pre-screen...")
+                    prescreen_result = self._quick_prescreen_company(company)
+                    
+                    if prescreen_result and prescreen_result.get('is_excluded'):
+                        exclusion_reason = prescreen_result.get('reason', 'Failed pre-screen')
+                        logger.warning(f"  ⚠ PRE-SCREEN EXCLUDED: {exclusion_reason}")
+                        try:
+                            self.campaign_leads_table.update(record_id, {
+                                'Processing Notes': f"PRE-SCREEN EXCLUDED: {exclusion_reason}",
+                                'Enrich': False
+                            })
+                        except:
+                            pass
+                        continue
+                    
+                    # Passed pre-screen, now create and enrich
+                    logger.info(f"  ✓ Pre-screen passed - creating and enriching...")
                     company_record_id = self.create_minimal_company(company)
                     newly_created_company = True
                     
@@ -1300,7 +1417,7 @@ Return ONLY valid JSON:
                         logger.error(f"  ✗ Failed to create company record")
                         company_data = {}
                 
-                # ========== CHECK FOR CDMO/COMPETITOR/SERVICE PROVIDER ==========
+                # ========== POST-ENRICHMENT CHECK ==========
                 icp_score = company_data.get('ICP Fit Score', 0) or 0
                 is_excluded = self._is_excluded_company(company_data, company)
                 
