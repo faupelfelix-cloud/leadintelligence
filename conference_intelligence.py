@@ -601,7 +601,7 @@ Search and assess now."""
             return None
     
     def create_company(self, company_name: str, icp_score: int) -> Dict:
-        """Create a new company record"""
+        """Create a new company record and enrich it immediately"""
         try:
             company_data = {
                 'Company Name': company_name,
@@ -610,10 +610,248 @@ Search and assess now."""
             }
             
             record = self.companies_table.create(company_data)
+            company_id = record['id']
             logger.info(f"    ✓ Created company: {company_name} (ICP: {icp_score})")
+            
+            # ENRICH IMMEDIATELY - inline enrichment
+            logger.info(f"    Enriching company...")
+            enriched = self._enrich_company_inline(company_id, company_name)
+            
+            if enriched:
+                # Update ICP score if enrichment found a better one
+                new_icp = enriched.get('icp_score')
+                if new_icp:
+                    logger.info(f"    ✓ Company enriched - ICP updated to: {new_icp}")
+                else:
+                    logger.info(f"    ✓ Company enriched")
+            else:
+                logger.warning(f"    ⚠ Could not enrich company")
+            
+            # Refresh the record to get updated data
+            record = self.companies_table.get(company_id)
             return record
+            
         except Exception as e:
             logger.error(f"    ✗ Failed to create company {company_name}: {str(e)}")
+            return None
+    
+    def _enrich_company_inline(self, company_id: str, company_name: str) -> Optional[Dict]:
+        """Enrich company with web search - inline implementation"""
+        
+        # Valid options for select fields
+        VALID_COMPANY_SIZE = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+']
+        VALID_FOCUS_AREAS = ['mAbs', 'Bispecifics', 'ADCs', 'Recombinant Proteins', 
+                            'Cell Therapy', 'Gene Therapy', 'Vaccines', 'Other']
+        VALID_TECH_PLATFORMS = ['Mammalian CHO', 'Mammalian Non-CHO', 'Microbial', 'Cell-Free', 'Other']
+        VALID_FUNDING_STAGES = ['Seed', 'Series A', 'Series B', 'Series C', 'Series D+', 'Public', 'Acquired', 'Unknown']
+        VALID_PIPELINE_STAGES = ['Preclinical', 'Phase 1', 'Phase 2', 'Phase 3', 'Commercial', 'Unknown']
+        VALID_THERAPEUTIC_AREAS = ['Oncology', 'Autoimmune', 'Rare Disease', 'Infectious Disease', 
+                                   'CNS', 'Metabolic', 'Cardiovascular', 'Other']
+        VALID_MANUFACTURING_STATUS = ['No Public Partner', 'Has Partner', 'Building In-House', 'Unknown']
+        
+        prompt = f"""Research this biotech/pharma company for business intelligence:
+
+COMPANY: {company_name}
+
+Find and return ALL of the following:
+1. Website URL
+2. LinkedIn company page URL
+3. Headquarters location (city, country)
+4. Company size - MUST be exactly one of: {', '.join(VALID_COMPANY_SIZE)}
+5. Focus areas - MUST be from: {', '.join(VALID_FOCUS_AREAS)}
+6. Technology platform - MUST be from: {', '.join(VALID_TECH_PLATFORMS)}
+7. Funding stage - MUST be exactly one of: {', '.join(VALID_FUNDING_STAGES)}
+8. Total funding raised (USD number only, e.g. 75000000)
+9. Latest funding round description (e.g. "Series B - $50M - Jan 2024")
+10. Pipeline stages - MUST be from: {', '.join(VALID_PIPELINE_STAGES)}
+11. Lead programs/products (text description)
+12. Therapeutic areas - MUST be from: {', '.join(VALID_THERAPEUTIC_AREAS)}
+13. Current CDMO partnerships (text - names of CDMOs if any)
+14. Manufacturing status - MUST be exactly one of: {', '.join(VALID_MANUFACTURING_STATUS)}
+15. Recent news or developments
+16. ICP Score (0-90) with justification
+17. Urgency Score (0-100) - how urgent is outreach?
+
+Return ONLY valid JSON:
+{{
+    "website": "https://...",
+    "linkedin_company_page": "https://linkedin.com/company/...",
+    "location": "City, Country",
+    "company_size": "51-200",
+    "focus_areas": ["mAbs", "Bispecifics"],
+    "technology_platforms": ["Mammalian CHO"],
+    "funding_stage": "Series B",
+    "total_funding_usd": 75000000,
+    "latest_funding_round": "Series B - $50M - Jan 2024",
+    "pipeline_stages": ["Phase 2"],
+    "lead_programs": "ABC-123 (anti-CD20 mAb) for autoimmune diseases",
+    "therapeutic_areas": ["Oncology", "Autoimmune"],
+    "cdmo_partnerships": "None publicly announced",
+    "manufacturing_status": "No Public Partner",
+    "recent_news": "Recently announced positive Phase 2 data...",
+    "icp_score": 65,
+    "icp_justification": "Mid-stage biotech with biologics focus, no public CDMO partner.",
+    "urgency_score": 75
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=2000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            # Parse JSON
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            data = json.loads(json_str.strip())
+            
+            # Helper function to validate single select
+            def validate_single(value, valid_options, default='Unknown'):
+                if not value:
+                    return default
+                if value in valid_options:
+                    return value
+                for opt in valid_options:
+                    if opt.lower() == value.lower():
+                        return opt
+                return default
+            
+            # Helper function to validate multi-select
+            def validate_multi(values, valid_options):
+                if not values:
+                    return []
+                if isinstance(values, str):
+                    values = [values]
+                validated = []
+                for val in values:
+                    matched = validate_single(val, valid_options, default=None)
+                    if matched and matched != 'Unknown':
+                        validated.append(matched)
+                return validated if validated else ['Other'] if 'Other' in valid_options else []
+            
+            # Update company record with all fields
+            update_fields = {
+                'Enrichment Status': 'Enriched',
+                'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d')
+            }
+            
+            # Basic fields
+            if data.get('website'):
+                update_fields['Website'] = data['website']
+            if data.get('linkedin_company_page'):
+                update_fields['LinkedIn Company Page'] = data['linkedin_company_page']
+            if data.get('location'):
+                update_fields['Location/HQ'] = data['location']
+            
+            # Company Size
+            if data.get('company_size'):
+                update_fields['Company Size'] = validate_single(data['company_size'], VALID_COMPANY_SIZE, '51-200')
+            
+            # Focus Area - multi-select
+            if data.get('focus_areas'):
+                validated = validate_multi(data['focus_areas'], VALID_FOCUS_AREAS)
+                if validated:
+                    update_fields['Focus Area'] = validated
+            
+            # Technology Platform - multi-select
+            if data.get('technology_platforms'):
+                validated = validate_multi(data['technology_platforms'], VALID_TECH_PLATFORMS)
+                if validated:
+                    update_fields['Technology Platform'] = validated
+            
+            # Funding Stage
+            if data.get('funding_stage'):
+                update_fields['Funding Stage'] = validate_single(data['funding_stage'], VALID_FUNDING_STAGES, 'Unknown')
+            
+            # Total Funding
+            if data.get('total_funding_usd'):
+                try:
+                    update_fields['Total Funding'] = float(data['total_funding_usd'])
+                except:
+                    pass
+            
+            # Latest Funding Round
+            if data.get('latest_funding_round'):
+                update_fields['Latest Funding Round'] = data['latest_funding_round']
+            
+            # Pipeline Stage - multi-select
+            if data.get('pipeline_stages'):
+                validated = validate_multi(data['pipeline_stages'], VALID_PIPELINE_STAGES)
+                if validated:
+                    update_fields['Pipeline Stage'] = validated
+            
+            # Lead Programs
+            if data.get('lead_programs'):
+                update_fields['Lead Programs'] = data['lead_programs']
+            
+            # Therapeutic Areas - multi-select
+            if data.get('therapeutic_areas'):
+                validated = validate_multi(data['therapeutic_areas'], VALID_THERAPEUTIC_AREAS)
+                if validated:
+                    update_fields['Therapeutic Areas'] = validated
+            
+            # Current CDMO Partnerships
+            if data.get('cdmo_partnerships'):
+                update_fields['Current CDMO Partnerships'] = data['cdmo_partnerships']
+            
+            # Manufacturing Status
+            if data.get('manufacturing_status'):
+                update_fields['Manufacturing Status'] = validate_single(data['manufacturing_status'], VALID_MANUFACTURING_STATUS, 'Unknown')
+            
+            # Intelligence Notes
+            if data.get('recent_news'):
+                update_fields['Intelligence Notes'] = f"Discovered via Conference Intelligence\n\n{data['recent_news'][:900]}"
+            
+            # Scores and justifications
+            if data.get('icp_score'):
+                update_fields['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
+            if data.get('icp_justification'):
+                update_fields['ICP Score Justification'] = data['icp_justification']
+            if data.get('urgency_score'):
+                update_fields['Urgency Score'] = min(max(int(data['urgency_score']), 0), 100)
+            
+            # Update record
+            try:
+                self.companies_table.update(company_id, update_fields)
+            except Exception as e:
+                logger.debug(f"Full company update failed: {e}")
+                # Try with minimal fields
+                minimal = {
+                    'Enrichment Status': 'Enriched',
+                    'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d')
+                }
+                if data.get('website'):
+                    minimal['Website'] = data['website']
+                if data.get('location'):
+                    minimal['Location/HQ'] = data['location']
+                if data.get('icp_score'):
+                    minimal['ICP Fit Score'] = min(max(int(data['icp_score']), 0), 90)
+                try:
+                    self.companies_table.update(company_id, minimal)
+                except:
+                    self.companies_table.update(company_id, {'Enrichment Status': 'Enriched'})
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"    Error in inline company enrichment: {e}")
             return None
     
     def find_lead(self, name: str, company_name: str) -> Optional[Dict]:
