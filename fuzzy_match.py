@@ -91,7 +91,9 @@ COMPANY_ALIASES = {
     'pfe': ['pfizer'],
     'pfizer': ['pfe'],
     'nvs': ['novartis'],
-    'novartis': ['nvs'],
+    'novartis': ['nvs', 'sandoz'],  # Sandoz is a Novartis division
+    'sandoz': ['novartis', 'sandoz group', 'sandoz ag'],
+    'sandoz group': ['sandoz', 'sandoz ag'],
     'roche': ['rhhby', 'hoffmann la roche', 'f hoffmann la roche', 'genentech'],
     'genentech': ['roche'],
     'sny': ['sanofi', 'sanofi aventis'],
