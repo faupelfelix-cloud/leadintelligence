@@ -29,12 +29,13 @@ from pyairtable.formulas import match
 try:
     from fuzzy_match import FuzzyMatcher, normalize_company_name, normalize_lead_name, similarity_score
     HAS_FUZZY_MATCH = True
-except ImportError:
+except ImportError as e:
     HAS_FUZZY_MATCH = False
     FuzzyMatcher = None
     normalize_company_name = lambda x: x.lower().strip() if x else ""
     normalize_lead_name = lambda x: x.lower().strip() if x else ""
     similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
+    print(f"Warning: Fuzzy matching not available: {e}")
 
 # Import existing enrichers
 from enrich_companies import CompanyEnricher
