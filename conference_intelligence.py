@@ -15,6 +15,17 @@ from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
 
+# Configure logging FIRST (before using logger)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('conference_intelligence.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Import fuzzy matching utilities
 try:
     from fuzzy_match import normalize_company_name, normalize_lead_name, similarity_score, check_company_alias
@@ -27,17 +38,6 @@ except ImportError as e:
     normalize_lead_name = lambda x: x.lower().strip() if x else ""
     similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
     check_company_alias = lambda x, y: False
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('conference_intelligence.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 
 class ConferenceIntelligence:
