@@ -853,6 +853,7 @@ Return ONLY JSON, no other text."""
                 'Date Detected': datetime.now().strftime('%Y-%m-%d'),
                 'Lead': [lead_record_id],  # Link to lead
                 'Trigger Type': trigger_event.get('type', 'OTHER'),
+                'Trigger Source': 'Lead Monitoring',  # New standardized field
                 'Urgency': trigger_event.get('urgency', 'MEDIUM'),
                 'Description': trigger_event.get('description', ''),
                 'Outreach Angle': trigger_event.get('outreach_angle', ''),
