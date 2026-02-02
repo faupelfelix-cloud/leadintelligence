@@ -1,29 +1,43 @@
-name: Campaign Leads - Process
+name: Campaign Leads - Bulk Process (2000+)
 
 on:
   workflow_dispatch:
     inputs:
-      campaign_type:
-        description: 'Filter by campaign type (optional)'
+      batch_size:
+        description: 'Batch size (leads per batch)'
         required: false
+        default: '50'
         type: choice
         options:
-          - ''
-          - Conference
-          - Webinar
-          - Trade Show
-          - Partnership Event
-          - Workshop
-          - Post-Event Follow-up
-          - Custom
-      limit:
-        description: 'Max leads to process (leave empty for all)'
+          - '25'
+          - '50'
+          - '100'
+          - '200'
+      skip_outreach:
+        description: 'Skip outreach generation (faster)'
         required: false
-        type: number
+        default: false
+        type: boolean
+      campaign_type:
+        description: 'Campaign type for outreach'
+        required: false
+        default: 'general'
+        type: choice
+        options:
+          - 'general'
+          - 'Conference'
+          - 'Roadshow'
+          - 'Webinar'
+      resume:
+        description: 'Resume (skip already processed)'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
-  process:
+  bulk-process:
     runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max for large batches
     
     steps:
       - name: Checkout repository
@@ -32,52 +46,92 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
       
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install pyairtable anthropic pyyaml
       
-      - name: Create config from secrets
+      - name: Create config file
+        run: |
+          cat > config.yaml << 'EOF'
+          airtable:
+            api_key: "${{ secrets.AIRTABLE_API_KEY }}"
+            base_id: "${{ secrets.AIRTABLE_BASE_ID }}"
+            tables:
+              companies: "Companies"
+              leads: "Leads"
+              campaign_leads: "Campaign Leads"
+              trigger_history: "Trigger History"
+          
+          anthropic:
+            api_key: "${{ secrets.ANTHROPIC_API_KEY }}"
+            model: "claude-sonnet-4-20250514"
+          
+          web_search:
+            rate_limit_delay: 2
+          
+          processing:
+            max_retries: 3
+            retry_delay: 5
+          EOF
+      
+      - name: Run bulk processing
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python setup.py
-      
-      - name: Process campaign leads
-        run: |
-          CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type }}"
-          LIMIT="${{ github.event.inputs.limit }}"
+          echo "======================================================"
+          echo "BULK CAMPAIGN LEADS PROCESSING"
+          echo "======================================================"
+          echo "Batch size: ${{ github.event.inputs.batch_size }}"
+          echo "Skip outreach: ${{ github.event.inputs.skip_outreach }}"
+          echo "Campaign type: ${{ github.event.inputs.campaign_type }}"
+          echo "Resume mode: ${{ github.event.inputs.resume }}"
+          echo "======================================================"
           
-          echo "=============================================="
-          echo "Campaign Leads - Full Processing"
-          echo "=============================================="
-          echo "This will automatically:"
-          echo "  1. Look up leads/companies in main tables"
-          echo "  2. Create & enrich if not found"
-          echo "  3. Generate personalized outreach messages"
-          echo "=============================================="
+          CMD="python process_campaign_leads.py --bulk"
+          CMD="$CMD --batch-size ${{ github.event.inputs.batch_size }}"
+          CMD="$CMD --campaign-type ${{ github.event.inputs.campaign_type }}"
           
-          CMD="python process_campaign_leads.py"
-          
-          if [ -n "$CAMPAIGN_TYPE" ]; then
-            echo "Filtering by campaign type: $CAMPAIGN_TYPE"
-            CMD="$CMD --campaign-type \"$CAMPAIGN_TYPE\""
+          if [ "${{ github.event.inputs.skip_outreach }}" = "true" ]; then
+            CMD="$CMD --skip-outreach"
           fi
           
-          if [ -n "$LIMIT" ]; then
-            echo "Processing up to $LIMIT leads..."
-            CMD="$CMD --limit $LIMIT"
+          if [ "${{ github.event.inputs.resume }}" = "false" ]; then
+            CMD="$CMD --no-resume"
           fi
           
+          echo "Running: $CMD"
           eval $CMD
       
-      - name: Upload log
+      - name: Upload logs
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: campaign-leads-log-${{ github.run_id }}
+          name: bulk-campaign-leads-log-${{ github.run_id }}
           path: campaign_leads.log
           retention-days: 30
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Bulk Campaign Leads Processing Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Batch Size | ${{ github.event.inputs.batch_size }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Skip Outreach | ${{ github.event.inputs.skip_outreach }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Campaign Type | ${{ github.event.inputs.campaign_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Resume Mode | ${{ github.event.inputs.resume }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f campaign_leads.log ]; then
+            echo "### Processing Results" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Get the summary section from the log
+            grep -A 20 "BULK PROCESSING COMPLETE" campaign_leads.log >> $GITHUB_STEP_SUMMARY || tail -30 campaign_leads.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
