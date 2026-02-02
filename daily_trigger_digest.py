@@ -656,9 +656,9 @@ class TriggerDigest:
         return rows
     
     def _generate_trigger_summaries(self, triggers: List[Dict]) -> str:
-        """Generate trigger summary and outreach angle sections"""
+        """Generate trigger summary and outreach angle sections - uses raw field values"""
         
-        # Combine descriptions and outreach angles from all triggers
+        # Get descriptions and outreach angles from all triggers (no modification)
         descriptions = []
         outreach_angles = []
         
@@ -673,27 +673,46 @@ class TriggerDigest:
         
         html = ""
         
-        # Description
+        # Description - show full text, no truncation
         if descriptions:
-            combined_desc = descriptions[0][:500] + ('...' if len(descriptions[0]) > 500 else '')
-            if len(descriptions) > 1:
-                combined_desc += f" (+{len(descriptions)-1} more)"
+            # If multiple descriptions, show all of them
+            if len(descriptions) == 1:
+                desc_html = descriptions[0].replace('\n', '<br>')
+            else:
+                # Multiple descriptions - show each one
+                desc_parts = []
+                for i, desc in enumerate(descriptions, 1):
+                    if len(descriptions) > 1:
+                        desc_parts.append(f"<strong>Event {i}:</strong><br>{desc.replace(chr(10), '<br>')}")
+                    else:
+                        desc_parts.append(desc.replace('\n', '<br>'))
+                desc_html = '<br><br>'.join(desc_parts)
             
             html += f"""
                 <div style="background-color: #f8f9fa; padding: 12px; border-radius: 8px; margin-bottom: 10px;">
                     <div style="font-size: 11px; font-weight: 600; color: #666; margin-bottom: 6px;">📝 TRIGGER SUMMARY</div>
-                    <div style="font-size: 13px; color: #333; line-height: 1.5;">{combined_desc}</div>
+                    <div style="font-size: 13px; color: #333; line-height: 1.5;">{desc_html}</div>
                 </div>
             """
         
-        # Outreach angle
+        # Outreach angle - show full text, no truncation
         if outreach_angles:
-            combined_angle = outreach_angles[0][:300] + ('...' if len(outreach_angles[0]) > 300 else '')
+            # If multiple angles, show all of them
+            if len(outreach_angles) == 1:
+                angle_html = outreach_angles[0].replace('\n', '<br>')
+            else:
+                angle_parts = []
+                for i, angle in enumerate(outreach_angles, 1):
+                    if len(outreach_angles) > 1:
+                        angle_parts.append(f"<strong>Angle {i}:</strong><br>{angle.replace(chr(10), '<br>')}")
+                    else:
+                        angle_parts.append(angle.replace('\n', '<br>'))
+                angle_html = '<br><br>'.join(angle_parts)
             
             html += f"""
                 <div style="background-color: #e7f3ff; padding: 12px; border-radius: 8px; border-left: 4px solid #0066cc;">
                     <div style="font-size: 11px; font-weight: 600; color: #0066cc; margin-bottom: 6px;">💡 OUTREACH ANGLE</div>
-                    <div style="font-size: 13px; color: #333; line-height: 1.5;">{combined_angle}</div>
+                    <div style="font-size: 13px; color: #333; line-height: 1.5;">{angle_html}</div>
                 </div>
             """
         
