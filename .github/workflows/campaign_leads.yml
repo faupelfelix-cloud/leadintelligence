@@ -9,19 +9,19 @@ on:
         type: choice
         options:
           - 'Standard Process'
-          - 'Bulk Process (2000+ leads)'
+          - 'Bulk Process (parallel)'
           - 'Enrich Only (skip outreach)'
           - 'Outreach Only (already enriched)'
           - 'Test (10 leads)'
       batch_size:
-        description: 'Batch size for bulk mode'
+        description: 'Leads per batch (bulk mode)'
         required: false
-        default: '50'
+        default: '200'
         type: choice
         options:
-          - '25'
-          - '50'
           - '100'
+          - '200'
+          - '300'
       campaign_type:
         description: 'Campaign type for outreach'
         required: false
@@ -38,7 +38,9 @@ on:
         type: number
 
 jobs:
-  process:
+  # Single job for non-bulk tasks
+  process-single:
+    if: github.event.inputs.task != 'Bulk Process (parallel)' && github.event.inputs.task != 'Enrich Only (skip outreach)'
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -64,17 +66,12 @@ jobs:
       - name: Process campaign leads
         run: |
           TASK="${{ github.event.inputs.task }}"
-          BATCH_SIZE="${{ github.event.inputs.batch_size || '50' }}"
           CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type || 'general' }}"
           LIMIT="${{ github.event.inputs.limit }}"
 
           echo "======================================================"
           echo "CAMPAIGN LEADS PROCESSOR"
-          echo "======================================================"
           echo "Task: $TASK"
-          echo "Batch size: $BATCH_SIZE"
-          echo "Campaign type: $CAMPAIGN_TYPE"
-          echo "Limit: ${LIMIT:-none}"
           echo "======================================================"
 
           case "$TASK" in
@@ -87,12 +84,6 @@ jobs:
               else
                 python process_campaign_leads.py --campaign-type "$CAMPAIGN_TYPE"
               fi
-              ;;
-            "Bulk Process (2000+ leads)")
-              python process_campaign_leads.py --bulk --batch-size $BATCH_SIZE --campaign-type "$CAMPAIGN_TYPE"
-              ;;
-            "Enrich Only (skip outreach)")
-              python process_campaign_leads.py --bulk --batch-size $BATCH_SIZE --skip-outreach
               ;;
             "Outreach Only (already enriched)")
               python process_campaign_leads.py --outreach-only --campaign-type "$CAMPAIGN_TYPE"
@@ -107,10 +98,57 @@ jobs:
           path: campaign_leads.log
           retention-days: 30
 
-      - name: Summary
-        if: always()
+  # Parallel batch processing (10 parallel jobs)
+  process-bulk:
+    if: github.event.inputs.task == 'Bulk Process (parallel)' || github.event.inputs.task == 'Enrich Only (skip outreach)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyairtable anthropic pyyaml
+
+      - name: Create config from secrets
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python setup.py
+
+      - name: Process batch
         run: |
-          echo "## Campaign Leads Processing" >> $GITHUB_STEP_SUMMARY
-          echo "**Task:** ${{ github.event.inputs.task }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Batch Size:** ${{ github.event.inputs.batch_size }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Campaign Type:** ${{ github.event.inputs.campaign_type }}" >> $GITHUB_STEP_SUMMARY
+          BATCH="${{ matrix.batch }}"
+          BATCH_SIZE="${{ github.event.inputs.batch_size || '200' }}"
+          CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type || 'general' }}"
+          TASK="${{ github.event.inputs.task }}"
+          OFFSET=$((BATCH * BATCH_SIZE))
+
+          echo "======================================================"
+          echo "BATCH $BATCH: Processing leads $OFFSET to $((OFFSET + BATCH_SIZE - 1))"
+          echo "======================================================"
+
+          if [ "$TASK" = "Enrich Only (skip outreach)" ]; then
+            python process_campaign_leads.py --enrich-only --limit $BATCH_SIZE --offset $OFFSET
+          else
+            python process_campaign_leads.py --limit $BATCH_SIZE --offset $OFFSET --campaign-type "$CAMPAIGN_TYPE"
+          fi
+
+      - name: Upload log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: campaign-leads-batch-${{ matrix.batch }}-${{ github.run_id }}
+          path: campaign_leads.log
+          retention-days: 30
