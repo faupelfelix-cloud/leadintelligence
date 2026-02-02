@@ -1349,7 +1349,7 @@ Return ONLY JSON."""
                     trigger_data['LinkedIn Connection Request'] = outreach['linkedin_connection']
                 if outreach.get('linkedin_short'):
                     trigger_data['LinkedIn Short Message'] = outreach['linkedin_short']
-                trigger_data['Message Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                trigger_data['Outreach Generated Date'] = datetime.now().strftime('%Y-%m-%d')
                 logger.info(f"    ✓ Outreach messages generated")
             else:
                 logger.warning(f"    ⚠ Could not generate outreach messages")
