@@ -65,6 +65,65 @@ COMPANY_WORD_MAPPINGS = {
     'svc': 'service',
 }
 
+# Known company aliases/abbreviations - maps alias to canonical name
+# Both directions are checked during matching
+COMPANY_ALIASES = {
+    # Big Pharma
+    'msd': ['merck sharp dohme', 'merck', 'merck and co', 'merck co'],
+    'merck': ['msd', 'merck sharp dohme', 'merck and co'],
+    'merck sharp dohme': ['msd', 'merck'],
+    'jnj': ['johnson johnson', 'johnson and johnson', 'janssen'],
+    'j&j': ['johnson johnson', 'johnson and johnson', 'janssen', 'jnj'],
+    'j and j': ['johnson johnson', 'johnson and johnson', 'janssen', 'jnj'],
+    'johnson johnson': ['jnj', 'j&j', 'janssen', 'j and j'],
+    'johnson and johnson': ['jnj', 'j&j', 'janssen', 'j and j'],
+    'janssen': ['jnj', 'j&j', 'johnson johnson', 'johnson and johnson'],
+    'gsk': ['glaxosmithkline', 'glaxo smith kline', 'glaxo'],
+    'glaxosmithkline': ['gsk', 'glaxo'],
+    'az': ['astrazeneca', 'astra zeneca'],
+    'astrazeneca': ['az', 'astra zeneca'],
+    'bms': ['bristol myers squibb', 'bristol-myers squibb'],
+    'bristol myers squibb': ['bms'],
+    'abbvie': ['abbott', 'abbv'],
+    'lly': ['eli lilly', 'lilly'],
+    'eli lilly': ['lly', 'lilly'],
+    'lilly': ['eli lilly', 'lly'],
+    'pfe': ['pfizer'],
+    'pfizer': ['pfe'],
+    'nvs': ['novartis'],
+    'novartis': ['nvs'],
+    'roche': ['rhhby', 'hoffmann la roche', 'f hoffmann la roche', 'genentech'],
+    'genentech': ['roche'],
+    'sny': ['sanofi', 'sanofi aventis'],
+    'sanofi': ['sny', 'sanofi aventis'],
+    'tak': ['takeda'],
+    'takeda': ['tak'],
+    'amgn': ['amgen'],
+    'amgen': ['amgn'],
+    'gild': ['gilead', 'gilead sciences'],
+    'gilead': ['gild', 'gilead sciences'],
+    'regn': ['regeneron'],
+    'regeneron': ['regn'],
+    'vrtx': ['vertex', 'vertex pharmaceuticals'],
+    'vertex': ['vrtx', 'vertex pharmaceuticals'],
+    'biib': ['biogen'],
+    'biogen': ['biib'],
+    'mrna': ['moderna'],
+    'moderna': ['mrna'],
+    'bntx': ['biontech'],
+    'biontech': ['bntx'],
+    # CDMOs
+    'lonza': ['lonza group', 'lonza biologics'],
+    'wuxi': ['wuxi biologics', 'wuxi apptec', 'wuxi app tec'],
+    'wuxi biologics': ['wuxi'],
+    'samsung biologics': ['samsung bio', 'samsung'],
+    'fuji': ['fujifilm', 'fujifilm diosynth', 'fuji diosynth'],
+    'fujifilm': ['fuji', 'fujifilm diosynth'],
+    'catalent': ['catalent pharma', 'catalent biologics'],
+    'boehringer': ['boehringer ingelheim', 'bi'],
+    'boehringer ingelheim': ['boehringer', 'bi'],
+}
+
 # Title variations for lead matching
 TITLE_ABBREVIATIONS = {
     'vp': 'vice president',
@@ -233,12 +292,57 @@ def similarity_ratio(s1: str, s2: str) -> float:
     return SequenceMatcher(None, s1, s2).ratio()
 
 
+def check_company_alias(name1: str, name2: str) -> bool:
+    """
+    Check if two company names are known aliases of each other.
+    Returns True if they are aliases, False otherwise.
+    """
+    norm1 = normalize_company_name(name1)
+    norm2 = normalize_company_name(name2)
+    raw1 = name1.lower().strip()
+    raw2 = name2.lower().strip()
+    
+    # Direct match
+    if norm1 == norm2:
+        return True
+    
+    # Check both raw and normalized versions against aliases
+    names_to_check = [raw1, norm1]
+    targets_to_match = [raw2, norm2]
+    
+    for name in names_to_check:
+        if name in COMPANY_ALIASES:
+            for alias in COMPANY_ALIASES[name]:
+                if alias in targets_to_match or any(alias in t or t in alias for t in targets_to_match):
+                    return True
+    
+    for name in targets_to_match:
+        if name in COMPANY_ALIASES:
+            for alias in COMPANY_ALIASES[name]:
+                if alias in names_to_check or any(alias in n or n in alias for n in names_to_check):
+                    return True
+    
+    # Check all aliases for partial matches
+    for key, aliases in COMPANY_ALIASES.items():
+        key_matches_1 = key in norm1 or norm1 in key or key in raw1 or raw1 in key
+        key_matches_2 = key in norm2 or norm2 in key or key in raw2 or raw2 in key
+        
+        if key_matches_1:
+            if any(a in norm2 or norm2 in a or a in raw2 or raw2 in a for a in aliases):
+                return True
+        if key_matches_2:
+            if any(a in norm1 or norm1 in a or a in raw1 or raw1 in a for a in aliases):
+                return True
+    
+    return False
+
+
 def similarity_score(name1: str, name2: str, normalize_func=normalize_company_name) -> float:
     """
     Calculate similarity score with normalization.
     
     Returns a score from 0.0 to 1.0 where:
-    - 1.0 = exact match (after normalization)
+    - 1.0 = exact match (after normalization) or known alias
     - 0.9+ = very likely the same
     - 0.8+ = probably the same
     - 0.7+ = possibly the same
@@ -251,6 +355,11 @@ def similarity_score(name1: str, name2: str, normalize_func=normalize_company_na
     # Exact match after normalization
     if norm1 == norm2:
         return 1.0
+    
+    # Check for known company aliases (only for company names)
+    if normalize_func == normalize_company_name:
+        if check_company_alias(norm1, norm2):
+            return 1.0  # Known alias = perfect match
     
     # Check if one contains the other (common for name variations)
     if norm1 in norm2 or norm2 in norm1:
@@ -341,7 +450,7 @@ class FuzzyMatcher:
         self._lead_cache: Dict[str, List[Dict]] = {}  # company_id -> leads
     
     def _load_companies(self, force_refresh: bool = False):
-        """Load all companies into cache."""
+        """Load all companies into cache, including alias mappings."""
         if self._company_list_loaded and not force_refresh:
             return
         
@@ -354,14 +463,34 @@ class FuzzyMatcher:
                 name = record['fields'].get('Company Name', '')
                 if name:
                     norm_name = normalize_company_name(name)
-                    self._company_cache[norm_name] = {
+                    company_data = {
                         'id': record['id'],
                         'name': name,
                         'fields': record['fields']
                     }
+                    
+                    # Index by normalized name
+                    self._company_cache[norm_name] = company_data
+                    
+                    # Also index by known aliases
+                    name_lower = name.lower().strip()
+                    if name_lower in COMPANY_ALIASES:
+                        for alias in COMPANY_ALIASES[name_lower]:
+                            alias_norm = normalize_company_name(alias)
+                            if alias_norm not in self._company_cache:
+                                self._company_cache[alias_norm] = company_data
+                    
+                    # Check if any alias key matches this company
+                    for alias_key, aliases in COMPANY_ALIASES.items():
+                        if alias_key in norm_name or norm_name in alias_key:
+                            # Add all related aliases
+                            for alias in aliases:
+                                alias_norm = normalize_company_name(alias)
+                                if alias_norm not in self._company_cache:
+                                    self._company_cache[alias_norm] = company_data
             
             self._company_list_loaded = True
-            logger.info(f"Loaded {len(self._company_cache)} companies")
+            logger.info(f"Loaded {len(records)} companies ({len(self._company_cache)} including aliases)")
             
         except Exception as e:
             logger.error(f"Error loading companies: {e}")
