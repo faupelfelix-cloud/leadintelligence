@@ -1314,23 +1314,32 @@ Return ONLY valid JSON:
     
     # ==================== MAIN WORKFLOWS ====================
     
-    def process_enrichment(self, limit: Optional[int] = None):
+    def process_enrichment(self, limit: Optional[int] = None, offset: int = 0):
         """
         Main enrichment workflow:
         1. Get campaign leads with Enrich checked
         2. For each lead, create/enrich company and lead in main tables
         3. Link campaign lead to enriched records
+        
+        Args:
+            limit: Max leads to process
+            offset: Skip first N leads (for parallel batch processing)
         """
         leads = self.get_campaign_leads_to_process(enrich_only=True)
+        
+        # Apply offset first, then limit
+        if offset > 0:
+            leads = leads[offset:]
+            logger.info(f"Skipping first {offset} leads (offset)")
         
         if limit:
             leads = leads[:limit]
         
         total = len(leads)
-        logger.info(f"Processing {total} campaign leads for enrichment")
+        logger.info(f"Processing {total} campaign leads for enrichment (offset: {offset})")
         
         if total == 0:
-            logger.info("No leads to process")
+            logger.info("No leads to process in this batch")
             return
         
         success = 0
@@ -1567,15 +1576,17 @@ Return ONLY valid JSON:
         logger.info(f"\n{'='*50}")
         logger.info(f"Outreach complete: {success}/{total} successful")
     
-    def process_all(self, limit: Optional[int] = None, campaign_type: str = "general"):
+    def process_all(self, limit: Optional[int] = None, campaign_type: str = "general", offset: int = 0):
         """Run full workflow: enrichment then outreach"""
         logger.info("="*50)
         logger.info("CAMPAIGN LEADS PROCESSOR - FULL WORKFLOW")
+        if offset > 0:
+            logger.info(f"Batch offset: {offset}")
         logger.info("="*50)
         
         # Step 1: Enrichment
         logger.info("\n--- PHASE 1: ENRICHMENT ---")
-        self.process_enrichment(limit)
+        self.process_enrichment(limit, offset)
         
         # Step 2: Outreach
         logger.info("\n--- PHASE 2: OUTREACH GENERATION ---")
@@ -1902,6 +1913,9 @@ Examples:
   
   # Generate outreach for already enriched leads
   python process_campaign_leads.py --outreach-only
+  
+  # Parallel batch processing (used by GitHub Actions)
+  python process_campaign_leads.py --limit 200 --offset 400
         """
     )
     parser.add_argument('--config', default='config.yaml', help='Config file path')
@@ -1912,6 +1926,8 @@ Examples:
     parser.add_argument('--campaign-type', type=str, default='general',
                         help='Campaign type for outreach messaging')
     parser.add_argument('--limit', type=int, help='Max leads to process')
+    parser.add_argument('--offset', type=int, default=0, 
+                        help='Skip first N leads (for parallel batch processing)')
     
     # Bulk processing options
     parser.add_argument('--bulk', action='store_true',
@@ -1939,11 +1955,11 @@ Examples:
             resume=resume
         )
     elif args.enrich_only:
-        processor.process_enrichment(args.limit)
+        processor.process_enrichment(args.limit, args.offset)
     elif args.outreach_only:
         processor.process_outreach(args.limit, args.campaign_type)
     else:
-        processor.process_all(args.limit, args.campaign_type)
+        processor.process_all(args.limit, args.campaign_type, args.offset)
 
 
 if __name__ == "__main__":
