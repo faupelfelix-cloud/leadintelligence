@@ -183,6 +183,68 @@ class CampaignLeadsProcessor:
         
         return None
     
+    def _is_known_excluded_company(self, company_name: str) -> Optional[str]:
+        """
+        Pre-check if company name matches known excluded companies.
+        This runs BEFORE creating any records to save API calls.
+        
+        Returns:
+            None if company should be processed
+            String with exclusion reason if should be skipped
+        """
+        if not company_name:
+            return None
+        
+        company_name_lower = company_name.lower().strip()
+        
+        # Known CDMO/CMO competitors - skip immediately
+        cdmo_competitors = [
+            'lonza', 'samsung biologics', 'wuxi biologics', 'wuxi apptec', 'wuxi',
+            'catalent', 'fujifilm', 'fujifilm diosynth', 'fuji diosynth',
+            'agc biologics', 'agc bio', 'patheon', 'thermo fisher',
+            'cytiva', 'sartorius', 'merck millipore', 'pall', 'rentschler',
+            'celltrion', 'samsung bioepis', 'binex', 'cellgen', 'abzena',
+            'evotec', 'charles river', 'eurofins', 'icon plc', 'iqvia',
+            'pra health', 'ppd', 'syneos', 'parexel', 'covance', 'labcorp',
+            'cmic', 'medidata', 'veeva', 'oracle health', 'medpace'
+        ]
+        
+        # Known service providers/equipment companies
+        service_providers = [
+            'bio-techne', 'biotechne', 'bio techne', 'r&d systems',
+            'abcam', 'cell signaling', 'beckman coulter', 'bd biosciences',
+            'agilent', 'illumina', 'thermo scientific', 'life technologies',
+            'ge healthcare', 'danaher', 'waters corporation', 'bruker',
+            'perkinelmer', 'biorad', 'bio-rad', 'qiagen', 'roche diagnostics',
+            'siemens healthineers', 'abbott diagnostics', 'hologic',
+            'stryker', 'medtronic', 'boston scientific', 'zimmer biomet',
+            'mckinsey', 'bcg', 'bain', 'deloitte', 'accenture', 'kpmg', 'pwc', 'ey',
+            'lek consulting', 'simon-kucher', 'zs associates', 'putnam'
+        ]
+        
+        # Check for exact or partial matches
+        for cdmo in cdmo_competitors:
+            if cdmo in company_name_lower or company_name_lower in cdmo:
+                return f"Known CDMO/CMO competitor: {cdmo}"
+        
+        for provider in service_providers:
+            if provider in company_name_lower or company_name_lower in provider:
+                return f"Known service provider: {provider}"
+        
+        # Check for generic indicators in company name
+        exclusion_indicators = [
+            'consulting', 'advisors', 'advisory', 'partners llp',
+            'cro ', ' cro', 'cdmo', ' cmo', 'contract research',
+            'contract manufacturing', 'clinical trials', 'diagnostics inc',
+            'equipment', 'instruments', 'laboratory services', 'lab services'
+        ]
+        
+        for indicator in exclusion_indicators:
+            if indicator in company_name_lower:
+                return f"Company name contains exclusion indicator: {indicator.strip()}"
+        
+        return None
+    
     def create_minimal_company(self, company_name: str) -> Optional[str]:
         """Create a minimal company record for enrichment"""
         try:
@@ -1198,9 +1260,23 @@ Return ONLY valid JSON:
             logger.info(f"\n[{idx}/{total}] {name} @ {company}")
             
             try:
+                # ========== PRE-CHECK: Known CDMOs/Service Providers ==========
+                pre_exclusion = self._is_known_excluded_company(company)
+                if pre_exclusion:
+                    logger.warning(f"  ⚠ PRE-EXCLUDED: {pre_exclusion}")
+                    try:
+                        self.campaign_leads_table.update(record_id, {
+                            'Processing Notes': f"PRE-EXCLUDED: {pre_exclusion}",
+                            'Enrich': False
+                        })
+                    except:
+                        pass
+                    continue
+                
                 # ========== STEP 1: COMPANY ==========
                 logger.info("  Checking Companies table...")
                 company_data, company_record_id = self.lookup_company(company)
+                newly_created_company = False
                 
                 if company_data:
                     logger.info(f"  ✓ Found existing company (ICP: {company_data.get('ICP Fit Score', 'N/A')})")
@@ -1208,6 +1284,7 @@ Return ONLY valid JSON:
                     # Create and enrich company
                     logger.info(f"  ○ Company not found - creating and enriching...")
                     company_record_id = self.create_minimal_company(company)
+                    newly_created_company = True
                     
                     if company_record_id:
                         enrichment_result = self.enrich_company_record(company_record_id, company)
@@ -1227,24 +1304,22 @@ Return ONLY valid JSON:
                 icp_score = company_data.get('ICP Fit Score', 0) or 0
                 is_excluded = self._is_excluded_company(company_data, company)
                 
-                if is_excluded:
-                    exclusion_reason = is_excluded
+                if is_excluded or icp_score == 0:
+                    exclusion_reason = is_excluded or "ICP Score = 0 (CDMO/competitor/service provider)"
                     logger.warning(f"  ⚠ EXCLUDED: {exclusion_reason}")
+                    
+                    # Delete the company record if we just created it (don't pollute database)
+                    if newly_created_company and company_record_id:
+                        try:
+                            self.companies_table.delete(company_record_id)
+                            logger.info(f"    Deleted excluded company record")
+                        except Exception as e:
+                            logger.warning(f"    Could not delete company: {e}")
+                    
                     # Update campaign lead with exclusion status
                     try:
                         self.campaign_leads_table.update(record_id, {
                             'Processing Notes': f"EXCLUDED: {exclusion_reason}",
-                            'Enrich': False  # Uncheck to prevent re-processing
-                        })
-                    except:
-                        pass
-                    continue
-                
-                if icp_score == 0:
-                    logger.warning(f"  ⚠ EXCLUDED: ICP Score = 0 (likely CDMO/competitor/service provider)")
-                    try:
-                        self.campaign_leads_table.update(record_id, {
-                            'Processing Notes': "EXCLUDED: ICP Score = 0 (CDMO/competitor/service provider)",
                             'Enrich': False
                         })
                     except:
