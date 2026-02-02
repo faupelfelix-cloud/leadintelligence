@@ -1584,10 +1584,326 @@ Return ONLY valid JSON:
         logger.info("\n" + "="*50)
         logger.info("WORKFLOW COMPLETE")
         logger.info("="*50)
+    
+    # ==================== BULK PROCESSING (2000+ leads) ====================
+    
+    def process_bulk(self, batch_size: int = 50, skip_outreach: bool = False,
+                     campaign_type: str = "general", resume: bool = True):
+        """
+        Process large batches of campaign leads (2000+) efficiently.
+        
+        Features:
+        - Batch processing with configurable batch size
+        - Progress tracking and logging
+        - Resume capability (skips already processed)
+        - Cost-efficient: pre-filters before expensive enrichment
+        - Detailed statistics
+        
+        Args:
+            batch_size: Number of leads per batch (default 50)
+            skip_outreach: If True, only do enrichment (faster)
+            campaign_type: Campaign type for outreach
+            resume: If True, skip already processed leads
+        """
+        start_time = datetime.now()
+        
+        logger.info("="*70)
+        logger.info("BULK CAMPAIGN LEADS PROCESSOR")
+        logger.info("="*70)
+        logger.info(f"Batch size: {batch_size}")
+        logger.info(f"Skip outreach: {skip_outreach}")
+        logger.info(f"Resume mode: {resume}")
+        logger.info("="*70)
+        
+        # Get all campaign leads
+        try:
+            all_leads = self.campaign_leads_table.all()
+        except Exception as e:
+            logger.error(f"Failed to fetch campaign leads: {e}")
+            return
+        
+        # Filter leads that need processing
+        if resume:
+            leads_to_process = [
+                r for r in all_leads 
+                if r['fields'].get('Enrich Lead') 
+                and not r['fields'].get('Linked Lead')
+                and not r['fields'].get('Processing Notes', '').startswith('EXCLUDED')
+                and not r['fields'].get('Processing Notes', '').startswith('PRE-')
+            ]
+        else:
+            leads_to_process = [
+                r for r in all_leads 
+                if r['fields'].get('Enrich Lead')
+            ]
+        
+        total_leads = len(leads_to_process)
+        logger.info(f"Total leads to process: {total_leads}")
+        logger.info(f"Already processed/excluded: {len(all_leads) - total_leads}")
+        
+        if total_leads == 0:
+            logger.info("No leads to process!")
+            return
+        
+        # Statistics
+        stats = {
+            'total': total_leads,
+            'processed': 0,
+            'pre_excluded': 0,
+            'prescreen_excluded': 0,
+            'enriched': 0,
+            'enrichment_failed': 0,
+            'existing_company': 0,
+            'existing_lead': 0,
+            'outreach_generated': 0,
+            'errors': 0,
+            'batches_completed': 0
+        }
+        
+        # Process in batches
+        num_batches = (total_leads + batch_size - 1) // batch_size
+        logger.info(f"Processing in {num_batches} batches of {batch_size}")
+        logger.info("="*70)
+        
+        rate_limit_delay = self.config.get('web_search', {}).get('rate_limit_delay', 2)
+        
+        for batch_num in range(num_batches):
+            batch_start = batch_num * batch_size
+            batch_end = min(batch_start + batch_size, total_leads)
+            batch = leads_to_process[batch_start:batch_end]
+            
+            logger.info(f"\n{'='*50}")
+            logger.info(f"BATCH {batch_num + 1}/{num_batches} (leads {batch_start + 1}-{batch_end})")
+            logger.info(f"{'='*50}")
+            
+            for idx, record in enumerate(batch, batch_start + 1):
+                fields = record['fields']
+                record_id = record['id']
+                
+                name = fields.get('Lead Name', 'Unknown')
+                company = fields.get('Company', 'Unknown')
+                title = fields.get('Title', '')
+                email = fields.get('Email', '')
+                
+                logger.info(f"\n[{idx}/{total_leads}] {name} @ {company}")
+                
+                try:
+                    # ========== TIER 1: INSTANT PRE-EXCLUSION ==========
+                    pre_exclusion = self._is_known_excluded_company(company)
+                    if pre_exclusion:
+                        logger.info(f"  ⚡ PRE-EXCLUDED: {pre_exclusion}")
+                        self._update_campaign_lead_status(record_id, f"PRE-EXCLUDED: {pre_exclusion}")
+                        stats['pre_excluded'] += 1
+                        stats['processed'] += 1
+                        continue
+                    
+                    # ========== CHECK EXISTING COMPANY ==========
+                    company_data, company_record_id = self.lookup_company(company)
+                    newly_created_company = False
+                    
+                    if company_data:
+                        logger.info(f"  ✓ Found existing company (ICP: {company_data.get('ICP Fit Score', 'N/A')})")
+                        stats['existing_company'] += 1
+                        
+                        # Check if existing company is excluded
+                        existing_icp = company_data.get('ICP Fit Score', 0) or 0
+                        if existing_icp == 0:
+                            logger.info(f"  ⚠ Existing company has ICP=0, skipping")
+                            self._update_campaign_lead_status(record_id, "EXCLUDED: Existing company has ICP=0")
+                            stats['prescreen_excluded'] += 1
+                            stats['processed'] += 1
+                            continue
+                    else:
+                        # ========== TIER 2: QUICK PRE-SCREEN ==========
+                        logger.info(f"  🔍 Running quick pre-screen...")
+                        prescreen_result = self._quick_prescreen_company(company)
+                        
+                        if prescreen_result and prescreen_result.get('is_excluded'):
+                            exclusion_reason = prescreen_result.get('reason', 'Failed pre-screen')
+                            logger.info(f"  ⚠ PRE-SCREEN EXCLUDED: {exclusion_reason}")
+                            self._update_campaign_lead_status(record_id, f"PRE-SCREEN EXCLUDED: {exclusion_reason}")
+                            stats['prescreen_excluded'] += 1
+                            stats['processed'] += 1
+                            continue
+                        
+                        # ========== TIER 3: FULL ENRICHMENT ==========
+                        logger.info(f"  ✓ Pre-screen passed - creating and enriching...")
+                        company_record_id = self.create_minimal_company(company)
+                        newly_created_company = True
+                        
+                        if company_record_id:
+                            enrichment_result = self.enrich_company_record(company_record_id, company)
+                            if enrichment_result:
+                                company_data = self.companies_table.get(company_record_id)['fields']
+                                stats['enriched'] += 1
+                            else:
+                                logger.warning(f"  ⚠ Company enrichment failed")
+                                company_data = {}
+                                stats['enrichment_failed'] += 1
+                            
+                            time.sleep(rate_limit_delay)
+                        else:
+                            logger.error(f"  ✗ Failed to create company record")
+                            stats['errors'] += 1
+                            stats['processed'] += 1
+                            continue
+                    
+                    # ========== POST-ENRICHMENT CHECK ==========
+                    icp_score = company_data.get('ICP Fit Score', 0) or 0
+                    is_excluded = self._is_excluded_company(company_data, company)
+                    
+                    if is_excluded or icp_score == 0:
+                        exclusion_reason = is_excluded or "ICP Score = 0"
+                        logger.info(f"  ⚠ EXCLUDED: {exclusion_reason}")
+                        
+                        if newly_created_company and company_record_id:
+                            try:
+                                self.companies_table.delete(company_record_id)
+                                logger.info(f"    Deleted excluded company record")
+                            except:
+                                pass
+                        
+                        self._update_campaign_lead_status(record_id, f"EXCLUDED: {exclusion_reason}")
+                        stats['prescreen_excluded'] += 1
+                        stats['processed'] += 1
+                        continue
+                    
+                    # ========== LEAD PROCESSING ==========
+                    lead_data, lead_record_id = self.lookup_lead(email, name, company)
+                    
+                    if lead_data:
+                        logger.info(f"  ✓ Found existing lead")
+                        stats['existing_lead'] += 1
+                    else:
+                        logger.info(f"  ○ Creating and enriching lead...")
+                        lead_record_id = self.create_minimal_lead(name, title, company_record_id)
+                        
+                        if lead_record_id:
+                            enrichment_result = self.enrich_lead_record(
+                                lead_record_id, name, company, title, company_record_id
+                            )
+                            if enrichment_result:
+                                lead_data = self.leads_table.get(lead_record_id)['fields']
+                                
+                                # Generate generic outreach
+                                self._generate_lead_generic_outreach(lead_record_id, name, title, company)
+                            
+                            time.sleep(rate_limit_delay)
+                    
+                    # ========== LINK CAMPAIGN LEAD ==========
+                    if self.update_campaign_lead_links(record_id, lead_record_id, company_record_id, lead_data):
+                        logger.info(f"  ✓ Campaign lead linked")
+                        
+                        # Create trigger
+                        if lead_record_id:
+                            self.create_trigger_event(
+                                lead_record_id=lead_record_id,
+                                company_record_id=company_record_id,
+                                campaign_fields=fields,
+                                lead_name=name,
+                                company_name=company
+                            )
+                        
+                        # Mark for outreach generation
+                        try:
+                            self.campaign_leads_table.update(record_id, {'Generate Messages': True})
+                        except:
+                            pass
+                    
+                    stats['processed'] += 1
+                    
+                except Exception as e:
+                    logger.error(f"  ✗ Error: {e}")
+                    stats['errors'] += 1
+                    stats['processed'] += 1
+                    continue
+            
+            stats['batches_completed'] += 1
+            
+            # Batch summary
+            elapsed = (datetime.now() - start_time).total_seconds()
+            rate = stats['processed'] / elapsed * 60 if elapsed > 0 else 0
+            remaining = total_leads - stats['processed']
+            eta_minutes = remaining / rate if rate > 0 else 0
+            
+            logger.info(f"\n--- Batch {batch_num + 1} Complete ---")
+            logger.info(f"Progress: {stats['processed']}/{total_leads} ({stats['processed']/total_leads*100:.1f}%)")
+            logger.info(f"Rate: {rate:.1f} leads/min | ETA: {eta_minutes:.0f} min")
+        
+        # ========== OUTREACH GENERATION (if not skipped) ==========
+        if not skip_outreach:
+            logger.info(f"\n{'='*70}")
+            logger.info("PHASE 2: GENERATING CAMPAIGN OUTREACH")
+            logger.info(f"{'='*70}")
+            self.process_outreach(campaign_type=campaign_type)
+            stats['outreach_generated'] = True
+        
+        # ========== FINAL SUMMARY ==========
+        elapsed = (datetime.now() - start_time).total_seconds()
+        
+        logger.info(f"\n{'='*70}")
+        logger.info("BULK PROCESSING COMPLETE")
+        logger.info(f"{'='*70}")
+        logger.info(f"Total time: {elapsed/60:.1f} minutes")
+        logger.info(f"Total processed: {stats['processed']}/{total_leads}")
+        logger.info(f"")
+        logger.info("Breakdown:")
+        logger.info(f"  • Pre-excluded (instant): {stats['pre_excluded']}")
+        logger.info(f"  • Pre-screen excluded: {stats['prescreen_excluded']}")
+        logger.info(f"  • Existing companies found: {stats['existing_company']}")
+        logger.info(f"  • New companies enriched: {stats['enriched']}")
+        logger.info(f"  • Enrichment failures: {stats['enrichment_failed']}")
+        logger.info(f"  • Existing leads found: {stats['existing_lead']}")
+        logger.info(f"  • Errors: {stats['errors']}")
+        logger.info(f"{'='*70}")
+        
+        # Cost estimate
+        api_calls = stats['enriched'] + stats['prescreen_excluded'] - stats['pre_excluded']
+        estimated_cost = api_calls * 0.02  # Rough estimate
+        logger.info(f"Estimated API cost: ~${estimated_cost:.2f}")
+        logger.info(f"Cost saved by pre-filtering: ~${stats['pre_excluded'] * 0.04 + stats['prescreen_excluded'] * 0.03:.2f}")
+        
+        return stats
+    
+    def _update_campaign_lead_status(self, record_id: str, status: str):
+        """Helper to update campaign lead processing status"""
+        try:
+            self.campaign_leads_table.update(record_id, {
+                'Processing Notes': status,
+                'Enrich Lead': False
+            })
+        except:
+            pass
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Campaign Leads Processor')
+    parser = argparse.ArgumentParser(
+        description='Campaign Leads Processor',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Standard processing (small batches)
+  python process_campaign_leads.py
+  
+  # Bulk processing for 2000+ leads
+  python process_campaign_leads.py --bulk
+  
+  # Bulk with custom batch size
+  python process_campaign_leads.py --bulk --batch-size 100
+  
+  # Bulk enrichment only (skip outreach for speed)
+  python process_campaign_leads.py --bulk --skip-outreach
+  
+  # Resume interrupted bulk processing
+  python process_campaign_leads.py --bulk --resume
+  
+  # Enrichment only (no outreach)
+  python process_campaign_leads.py --enrich-only
+  
+  # Generate outreach for already enriched leads
+  python process_campaign_leads.py --outreach-only
+        """
+    )
     parser.add_argument('--config', default='config.yaml', help='Config file path')
     parser.add_argument('--enrich-only', action='store_true', 
                         help='Only run enrichment, skip outreach')
@@ -1597,11 +1913,32 @@ def main():
                         help='Campaign type for outreach messaging')
     parser.add_argument('--limit', type=int, help='Max leads to process')
     
+    # Bulk processing options
+    parser.add_argument('--bulk', action='store_true',
+                        help='Enable bulk processing mode for 2000+ leads')
+    parser.add_argument('--batch-size', type=int, default=50,
+                        help='Batch size for bulk processing (default: 50)')
+    parser.add_argument('--skip-outreach', action='store_true',
+                        help='Skip outreach generation in bulk mode (faster)')
+    parser.add_argument('--resume', action='store_true', default=True,
+                        help='Resume from where left off (skip processed leads)')
+    parser.add_argument('--no-resume', action='store_true',
+                        help='Process all leads, even if already processed')
+    
     args = parser.parse_args()
     
     processor = CampaignLeadsProcessor(args.config)
     
-    if args.enrich_only:
+    if args.bulk:
+        # Bulk processing mode
+        resume = not args.no_resume
+        processor.process_bulk(
+            batch_size=args.batch_size,
+            skip_outreach=args.skip_outreach,
+            campaign_type=args.campaign_type,
+            resume=resume
+        )
+    elif args.enrich_only:
         processor.process_enrichment(args.limit)
     elif args.outreach_only:
         processor.process_outreach(args.limit, args.campaign_type)
