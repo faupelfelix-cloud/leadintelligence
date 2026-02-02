@@ -17,13 +17,16 @@ from pyairtable import Api
 
 # Import fuzzy matching utilities
 try:
-    from fuzzy_match import normalize_company_name, normalize_lead_name, similarity_score
+    from fuzzy_match import normalize_company_name, normalize_lead_name, similarity_score, check_company_alias
     HAS_FUZZY_MATCH = True
-except ImportError:
+    logger.info("✓ Fuzzy matching module loaded successfully")
+except ImportError as e:
     HAS_FUZZY_MATCH = False
+    logger.warning(f"⚠ Fuzzy matching not available: {e}")
     normalize_company_name = lambda x: x.lower().strip() if x else ""
     normalize_lead_name = lambda x: x.lower().strip() if x else ""
     similarity_score = lambda x, y, f: 1.0 if f(x) == f(y) else 0.0
+    check_company_alias = lambda x, y: False
 
 # Configure logging
 logging.basicConfig(
@@ -572,13 +575,22 @@ Search and assess now."""
             records = self.companies_table.all(formula=formula)
             
             if records:
+                logger.debug(f"    Exact match found: {company_name}")
                 return records[0]
             
-            # Try fuzzy match if enabled
+            # Try normalized exact match (e.g., "Sandoz" matches "Sandoz Group")
             if HAS_FUZZY_MATCH:
-                all_companies = self.companies_table.all()
                 norm_query = normalize_company_name(company_name)
+                all_companies = self.companies_table.all()
                 
+                # First pass: look for exact normalized match
+                for record in all_companies:
+                    existing_name = record['fields'].get('Company Name', '')
+                    if normalize_company_name(existing_name) == norm_query:
+                        logger.info(f"    Normalized match: '{company_name}' -> '{existing_name}'")
+                        return record
+                
+                # Second pass: fuzzy match
                 best_match = None
                 best_score = 0.0
                 
@@ -595,9 +607,12 @@ Search and assess now."""
                     matched_name = best_match['fields'].get('Company Name', '')
                     logger.info(f"    Fuzzy matched company '{company_name}' -> '{matched_name}' (score: {best_score:.2f})")
                     return best_match
+                
+                logger.debug(f"    No match for '{company_name}' (best score: {best_score:.2f})")
             
             return None
-        except:
+        except Exception as e:
+            logger.warning(f"    Error in find_company for '{company_name}': {e}")
             return None
     
     def create_company(self, company_name: str, icp_score: int) -> Dict:
