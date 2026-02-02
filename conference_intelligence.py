@@ -1237,7 +1237,7 @@ Return ONLY JSON."""
             
             # Update lead with outreach messages
             outreach_update = {
-                'Outreach Generated Date': datetime.now().strftime('%Y-%m-%d')
+                'Message Generated Date': datetime.now().strftime('%Y-%m-%d')
             }
             
             if data.get('email_subject'):
@@ -1334,7 +1334,7 @@ Return ONLY JSON."""
                     trigger_data['LinkedIn Connection Request'] = outreach['linkedin_connection']
                 if outreach.get('linkedin_short'):
                     trigger_data['LinkedIn Short Message'] = outreach['linkedin_short']
-                trigger_data['Outreach Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                trigger_data['Message Generated Date'] = datetime.now().strftime('%Y-%m-%d')
                 logger.info(f"    ✓ Outreach messages generated")
             else:
                 logger.warning(f"    ⚠ Could not generate outreach messages")
