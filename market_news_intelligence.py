@@ -2062,6 +2062,7 @@ Return ONLY JSON."""
                 'Event Date': event_date,
                 'Lead': [lead_id],
                 'Trigger Type': trigger_type,
+                'Trigger Source': 'News Intelligence',  # New standardized field
                 'Urgency': urgency,
                 'Description': description[:1000],
                 'Outreach Angle': outreach_angle[:500],
