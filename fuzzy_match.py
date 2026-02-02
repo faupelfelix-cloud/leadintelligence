@@ -165,12 +165,14 @@ def normalize_company_name(name: str) -> str:
         "Johnson & Johnson" -> "johnson and johnson"
         "F. Hoffmann-La Roche Ltd" -> "f hoffmann la roche"
         "BioNTech SE" -> "biontech"
+        "R-Pharm" -> "r-pharm" (preserved because too short otherwise)
     """
     if not name:
         return ""
     
     # Lowercase
     normalized = name.lower().strip()
+    original_normalized = normalized  # Keep for fallback
     
     # Replace special characters
     for old, new in COMPANY_WORD_MAPPINGS.items():
@@ -191,6 +193,22 @@ def normalize_company_name(name: str) -> str:
     
     # Remove trailing/leading hyphens
     normalized = normalized.strip('-').strip()
+    
+    # SAFEGUARD: If we stripped too much, use a more conservative normalization
+    # A valid company name should be at least 3 characters
+    if len(normalized) < 3:
+        # Fall back to just removing obvious suffixes and punctuation
+        fallback = original_normalized
+        # Only remove the most common corporate suffixes
+        for suffix in ['inc.', 'inc', 'ltd.', 'ltd', 'llc', 'corp.', 'corp', 'plc', 'ag', 'sa', 'gmbh']:
+            pattern = rf'\s*\b{re.escape(suffix)}\b\.?\s*$'
+            fallback = re.sub(pattern, '', fallback, flags=re.IGNORECASE)
+        fallback = re.sub(r'[^\w\s\-]', '', fallback)  # Remove punctuation
+        fallback = ' '.join(fallback.split()).strip()
+        if len(fallback) >= 3:
+            return fallback
+        # If still too short, return original lowercase
+        return name.lower().strip()
     
     return normalized
 
@@ -304,37 +322,98 @@ def check_company_alias(name1: str, name2: str) -> bool:
     raw1 = name1.lower().strip()
     raw2 = name2.lower().strip()
     
+    # Minimum length for partial matching (avoid matching single letters)
+    MIN_MATCH_LENGTH = 3
+    
     # Direct match
     if norm1 == norm2:
         return True
+    
+    # Skip alias checking if either name is too short (likely over-normalized)
+    # But still allow exact matches against known alias keys
+    if len(norm1) < MIN_MATCH_LENGTH or len(norm2) < MIN_MATCH_LENGTH:
+        # Special case: check if short name is an EXACT alias key
+        short_name = norm1 if len(norm1) < MIN_MATCH_LENGTH else norm2
+        long_name = norm2 if len(norm1) < MIN_MATCH_LENGTH else norm1
+        long_raw = raw2 if len(norm1) < MIN_MATCH_LENGTH else raw1
+        
+        if short_name in COMPANY_ALIASES:
+            for alias in COMPANY_ALIASES[short_name]:
+                alias_norm = normalize_company_name(alias)
+                if alias_norm == long_name or alias == long_raw or alias_norm == long_raw:
+                    return True
+        # Also check if long name has short name as an alias
+        if long_name in COMPANY_ALIASES:
+            if short_name in COMPANY_ALIASES[long_name]:
+                return True
+            for alias in COMPANY_ALIASES[long_name]:
+                if normalize_company_name(alias) == short_name:
+                    return True
+        return False
     
     # Check both raw and normalized versions against aliases
     names_to_check = [raw1, norm1]
     targets_to_match = [raw2, norm2]
     
+    # Helper function to check if names match (with length check)
+    def safe_contains(haystack: str, needle: str) -> bool:
+        return len(needle) >= MIN_MATCH_LENGTH and needle in haystack
+    
     for name in names_to_check:
         if name in COMPANY_ALIASES:
             for alias in COMPANY_ALIASES[name]:
-                if alias in targets_to_match or any(alias in t or t in alias for t in targets_to_match):
+                alias_norm = normalize_company_name(alias)
+                if alias in targets_to_match or alias_norm in targets_to_match:
                     return True
+                # Check partial match only if lengths are reasonable
+                for t in targets_to_match:
+                    if safe_contains(alias, t) or safe_contains(t, alias):
+                        return True
     
     for name in targets_to_match:
         if name in COMPANY_ALIASES:
             for alias in COMPANY_ALIASES[name]:
-                if alias in names_to_check or any(alias in n or n in alias for n in names_to_check):
+                alias_norm = normalize_company_name(alias)
+                if alias in names_to_check or alias_norm in names_to_check:
                     return True
+                for n in names_to_check:
+                    if safe_contains(alias, n) or safe_contains(n, alias):
+                        return True
     
-    # Check all aliases for partial matches
+    # Check all aliases for partial matches (only with sufficient length)
     for key, aliases in COMPANY_ALIASES.items():
-        key_matches_1 = key in norm1 or norm1 in key or key in raw1 or raw1 in key
-        key_matches_2 = key in norm2 or norm2 in key or key in raw2 or raw2 in key
+        # Only check if key or normalized names are long enough
+        if len(key) < MIN_MATCH_LENGTH:
+            continue
+            
+        # Exact key match (not substring)
+        key_matches_1 = key == norm1 or key == raw1
+        key_matches_2 = key == norm2 or key == raw2
+        
+        # Substring match only if both are long enough
+        if not key_matches_1 and len(norm1) >= MIN_MATCH_LENGTH:
+            key_matches_1 = (key in norm1 and len(key) >= MIN_MATCH_LENGTH) or \
+                           (norm1 in key and len(norm1) >= MIN_MATCH_LENGTH)
+        if not key_matches_2 and len(norm2) >= MIN_MATCH_LENGTH:
+            key_matches_2 = (key in norm2 and len(key) >= MIN_MATCH_LENGTH) or \
+                           (norm2 in key and len(norm2) >= MIN_MATCH_LENGTH)
         
         if key_matches_1:
-            if any(a in norm2 or norm2 in a or a in raw2 or raw2 in a for a in aliases):
-                return True
+            for a in aliases:
+                a_norm = normalize_company_name(a)
+                if a == norm2 or a == raw2 or a_norm == norm2:
+                    return True
+                if len(a) >= MIN_MATCH_LENGTH and len(norm2) >= MIN_MATCH_LENGTH:
+                    if a in norm2 or norm2 in a or a in raw2 or raw2 in a:
+                        return True
         if key_matches_2:
-            if any(a in norm1 or norm1 in a or a in raw1 or raw1 in a for a in aliases):
-                return True
+            for a in aliases:
+                a_norm = normalize_company_name(a)
+                if a == norm1 or a == raw1 or a_norm == norm1:
+                    return True
+                if len(a) >= MIN_MATCH_LENGTH and len(norm1) >= MIN_MATCH_LENGTH:
+                    if a in norm1 or norm1 in a or a in raw1 or raw1 in a:
+                        return True
     
     return False
 
