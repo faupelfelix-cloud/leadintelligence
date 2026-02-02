@@ -668,28 +668,365 @@ Search and assess now."""
             return None
     
     def create_lead(self, name: str, title: str, company_id: str, source: str) -> Dict:
-        """Create a new lead record"""
+        """Create a new lead record and enrich it immediately"""
         try:
+            # Get company info for enrichment
+            company_name = "Unknown Company"
+            company_icp = 50
+            try:
+                company_record = self.companies_table.get(company_id)
+                company_name = company_record['fields'].get('Company Name', 'Unknown Company')
+                company_icp = company_record['fields'].get('ICP Fit Score', 50)
+            except:
+                pass
+            
             # Required fields
             lead_data = {
                 'Lead Name': name,
                 'Title': title,
                 'Company': [company_id],
                 'Enrichment Status': 'Not Enriched',
+                'Lead Source': 'Conference Intelligence',
                 'Intelligence Notes': f"Discovered via Conference Intelligence\nSource: {source}"
             }
             
             record = self.leads_table.create(lead_data)
+            lead_id = record['id']
             logger.info(f"    ✓ Created lead: {name}")
+            
+            # ENRICH IMMEDIATELY - inline enrichment
+            logger.info(f"    Enriching lead...")
+            enriched = self._enrich_lead_inline(
+                lead_id=lead_id,
+                lead_name=name,
+                lead_title=title,
+                company_id=company_id,
+                company_name=company_name,
+                company_icp=company_icp
+            )
+            
+            if enriched:
+                logger.info(f"    ✓ Lead enriched - ICP: {enriched.get('lead_icp', 'N/A')}")
+                
+                # Generate generic outreach messages for the lead
+                logger.info(f"    Generating generic outreach messages...")
+                self._generate_lead_outreach(lead_id, name, title, company_name)
+            else:
+                logger.warning(f"    ⚠ Could not enrich lead")
+            
+            # Refresh the record to get updated data
+            record = self.leads_table.get(lead_id)
             return record
+            
         except Exception as e:
             logger.error(f"    ✗ Failed to create lead {name}: {str(e)}")
             return None
     
+    def _enrich_lead_inline(self, lead_id: str, lead_name: str, lead_title: str,
+                           company_id: str, company_name: str, company_icp: int,
+                           linkedin_url: str = None) -> Optional[Dict]:
+        """Enrich lead with web search - inline implementation"""
+        
+        prompt = f"""Research this professional for contact information:
+
+NAME: {lead_name}
+TITLE: {lead_title}
+COMPANY: {company_name}
+{f"LINKEDIN: {linkedin_url}" if linkedin_url else ""}
+
+Find:
+1. Email address (search company website, press releases, LinkedIn, conference presentations)
+2. Verify current title
+3. LinkedIn URL (if not provided)
+4. Location (city, country)
+5. Any recent news, speaking engagements, or publications
+
+EMAIL FINDING PRIORITY - try these sources:
+- Company website team/leadership page
+- Press releases with contact info
+- Conference speaker lists
+- Published papers/patents
+- If not found, suggest email pattern based on company format (e.g., firstname.lastname@company.com)
+
+Return ONLY valid JSON:
+{{
+    "email": "email@company.com or null",
+    "email_confidence": "High|Medium|Low|Pattern Suggested",
+    "title": "Current verified title",
+    "linkedin_url": "https://linkedin.com/in/...",
+    "location": "City, Country",
+    "recent_activity": "Any recent news or speaking engagements"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=2000,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            # Extract text
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            # Parse JSON
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            data = json.loads(json_str.strip())
+            
+            # Calculate lead ICP based on title
+            lead_icp, lead_icp_justification = self._calculate_lead_icp_with_justification(
+                data.get('title') or lead_title, company_icp
+            )
+            
+            # Determine Lead ICP Tier
+            if lead_icp >= 85:
+                lead_icp_tier = "Perfect Fit (Tier 1)"
+            elif lead_icp >= 70:
+                lead_icp_tier = "Strong Fit (Tier 2)"
+            elif lead_icp >= 55:
+                lead_icp_tier = "Good Fit (Tier 3)"
+            elif lead_icp >= 40:
+                lead_icp_tier = "Acceptable Fit (Tier 4)"
+            else:
+                lead_icp_tier = "Poor Fit (Tier 5)"
+            
+            # Calculate Combined Priority
+            combined_priority = self._calculate_combined_priority(company_icp, lead_icp)
+            
+            # Map email confidence
+            email_conf = data.get('email_confidence', 'Medium')
+            confidence_map = {
+                'high': 'High',
+                'medium': 'Medium',
+                'low': 'Low',
+                'pattern suggested': 'Low',
+                'pattern': 'Low'
+            }
+            enrichment_confidence = confidence_map.get(email_conf.lower(), 'Medium')
+            
+            # Update lead record
+            update_fields = {
+                'Enrichment Status': 'Enriched',
+                'Last Enrichment Date': datetime.now().strftime('%Y-%m-%d'),
+                'Lead ICP Score': lead_icp,
+                'Lead ICP Tier': lead_icp_tier,
+                'Lead ICP Justification': lead_icp_justification,
+                'Combined Priority': combined_priority,
+                'Enrichment Confidence': enrichment_confidence
+            }
+            
+            if data.get('email'):
+                update_fields['Email'] = data['email']
+            if data.get('title'):
+                update_fields['Title'] = data['title']
+            if data.get('linkedin_url'):
+                update_fields['LinkedIn URL'] = data['linkedin_url']
+            if data.get('recent_activity'):
+                existing_notes = f"Discovered via Conference Intelligence\n\n"
+                update_fields['Intelligence Notes'] = existing_notes + f"Recent Activity: {data['recent_activity'][:800]}"
+            
+            try:
+                self.leads_table.update(lead_id, update_fields)
+            except Exception as e:
+                logger.warning(f"    Lead update partially failed: {e}")
+                # Try updating fields one by one
+                for field_name, field_value in update_fields.items():
+                    try:
+                        self.leads_table.update(lead_id, {field_name: field_value})
+                    except:
+                        pass
+            
+            return {
+                'email': data.get('email'),
+                'title': data.get('title') or lead_title,
+                'linkedin_url': data.get('linkedin_url') or linkedin_url,
+                'lead_icp': lead_icp,
+                'company_icp': company_icp,
+                'combined_priority': combined_priority
+            }
+            
+        except Exception as e:
+            logger.error(f"    Error in inline lead enrichment: {e}")
+            return None
+    
+    def _calculate_lead_icp_with_justification(self, title: str, company_icp: int) -> tuple:
+        """Calculate lead ICP score with justification based on title and company ICP"""
+        if not title:
+            return 50, "No title provided - default score"
+        
+        title_lower = title.lower()
+        
+        # Title scoring
+        title_score = 50
+        title_reason = "Standard role"
+        
+        # High-value titles (70-90)
+        if any(t in title_lower for t in ['vp manufacturing', 'vp operations', 'head of cmc', 
+                                           'chief operating', 'coo', 'vp supply chain',
+                                           'head of manufacturing', 'svp operations']):
+            title_score = 85
+            title_reason = "Key decision maker for manufacturing/operations - highest priority"
+        elif any(t in title_lower for t in ['vp', 'vice president', 'head of', 'director']):
+            if any(f in title_lower for f in ['manufacturing', 'operations', 'cmc', 'supply', 'technical']):
+                title_score = 75
+                title_reason = "Senior leader in relevant functional area"
+            else:
+                title_score = 60
+                title_reason = "Senior leader, may influence CDMO decisions"
+        elif any(t in title_lower for t in ['ceo', 'chief executive', 'president', 'founder']):
+            title_score = 70
+            title_reason = "Top decision maker - strategic influence on partnerships"
+        elif any(t in title_lower for t in ['senior director', 'executive director']):
+            title_score = 70
+            title_reason = "Senior director level - significant influence"
+        elif 'director' in title_lower:
+            title_score = 60
+            title_reason = "Director level - involved in partner selection"
+        elif 'manager' in title_lower:
+            title_score = 45
+            title_reason = "Manager level - may influence but not decide"
+        
+        # Combine with company ICP (60% title, 40% company)
+        combined = int(title_score * 0.6 + company_icp * 0.4)
+        combined = min(max(combined, 0), 100)
+        
+        justification = f"Title score: {title_score}/100 ({title_reason}). Company ICP: {company_icp}/90. Combined: {combined}/100"
+        
+        return combined, justification
+    
+    def _calculate_combined_priority(self, company_icp: int, lead_icp: int) -> str:
+        """Calculate combined priority based on company and lead ICP scores"""
+        if company_icp >= 80 and lead_icp >= 70:
+            return "🔥 HOT - Priority 1"
+        elif company_icp >= 80 and lead_icp >= 55:
+            return "📈 WARM - Priority 2"
+        elif company_icp >= 65 and lead_icp >= 70:
+            return "📈 WARM - Priority 2"
+        elif company_icp >= 65 and lead_icp >= 55:
+            return "➡️ MEDIUM - Priority 3"
+        elif company_icp >= 50 and lead_icp >= 40:
+            return "➡️ MEDIUM - Priority 3"
+        elif company_icp >= 35 and lead_icp >= 40:
+            return "⬇️ LOW - Priority 4"
+        else:
+            return "❌ SKIP - Priority 5"
+    
+    def _generate_lead_outreach(self, lead_id: str, lead_name: str, lead_title: str, 
+                                company_name: str) -> bool:
+        """Generate generic outreach messages for a lead"""
+        
+        prompt = f"""Generate professional outreach messages for this lead.
+
+LEAD:
+Name: {lead_name}
+Title: {lead_title}
+Company: {company_name}
+
+YOUR COMPANY: European biologics CDMO specializing in mammalian cell culture manufacturing (mAbs, bispecifics, ADCs)
+
+Generate 4 messages for initial outreach:
+
+1. EMAIL (80-100 words):
+Subject: [Professional subject line]
+- Brief intro
+- Value proposition relevant to their role
+- Soft CTA
+- Sign: "Best regards, [Your Name]"
+
+2. LINKEDIN CONNECTION (150-180 chars):
+- Why you'd like to connect
+- Professional tone
+
+3. LINKEDIN SHORT MESSAGE (200-300 chars):
+- Relevant to their role
+- Brief value mention
+- Sign: "Best regards, [Your Name]"
+
+4. LINKEDIN INMAIL (150-200 words):
+Subject: [InMail subject]
+- More detailed intro
+- Clear value proposition
+- CTA
+- Sign: "Best regards, [Your Name]"
+
+Return ONLY valid JSON:
+{{
+    "email_subject": "Subject line",
+    "email_body": "Email body",
+    "linkedin_connection": "Connection request",
+    "linkedin_short": "Short message",
+    "linkedin_inmail_subject": "InMail subject",
+    "linkedin_inmail": "InMail body"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return False
+            
+            data = json.loads(json_str.strip())
+            
+            # Update lead with outreach messages
+            outreach_update = {
+                'Outreach Generated Date': datetime.now().strftime('%Y-%m-%d')
+            }
+            
+            if data.get('email_subject'):
+                outreach_update['Email Subject'] = data['email_subject']
+            if data.get('email_body'):
+                outreach_update['Email Body'] = data['email_body']
+            if data.get('linkedin_connection'):
+                outreach_update['LinkedIn Connection Request'] = data['linkedin_connection']
+            if data.get('linkedin_short'):
+                outreach_update['LinkedIn Short Message'] = data['linkedin_short']
+            if data.get('linkedin_inmail_subject'):
+                outreach_update['LinkedIn InMail Subject'] = data['linkedin_inmail_subject']
+            if data.get('linkedin_inmail'):
+                outreach_update['LinkedIn InMail Body'] = data['linkedin_inmail']
+            
+            self.leads_table.update(lead_id, outreach_update)
+            logger.info(f"    ✓ Generic outreach messages generated")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"    Error generating lead outreach: {e}")
+            return False
+    
     def create_conference_trigger(self, lead_id: str, company_id: str, conference_name: str, 
                                   conference_date: str, role_at_conference: str,
                                   session_topic: str = None, source_url: str = None) -> bool:
-        """Create CONFERENCE_ATTENDANCE trigger"""
+        """Create CONFERENCE_ATTENDANCE trigger with outreach messages"""
         try:
             # Build description
             description = f"Conference: {conference_name}\nRole: {role_at_conference}"
@@ -699,10 +1036,25 @@ Search and assess now."""
                 description += f"\nSource URL: {source_url}"
             
             # Build outreach angle
-            outreach_angle = f"Attending/speaking at {conference_name}. Great opportunity to connect before or at the event."
+            if session_topic:
+                outreach_angle = f"Speaking at {conference_name} about '{session_topic}'. Great opportunity to connect before or at the event."
+            else:
+                outreach_angle = f"Attending/speaking at {conference_name}. Great opportunity to connect before or at the event."
             
-            # Timing recommendation
-            timing = "Contact 2-4 weeks before conference to arrange meeting"
+            # Timing recommendation based on conference date
+            try:
+                conf_date = datetime.strptime(conference_date, '%Y-%m-%d')
+                days_until = (conf_date - datetime.now()).days
+                if days_until > 30:
+                    timing = f"Contact now - {days_until} days until conference. Ideal time to arrange meeting."
+                elif days_until > 14:
+                    timing = f"Contact within 1 week - {days_until} days until conference."
+                elif days_until > 0:
+                    timing = f"Urgent: Only {days_until} days until conference. Reach out immediately."
+                else:
+                    timing = "Conference has passed - follow up on experience at the event."
+            except:
+                timing = "Contact 2-4 weeks before conference to arrange meeting"
             
             # Build sources list
             sources = ["Conference Intelligence System"]
@@ -712,18 +1064,42 @@ Search and assess now."""
             trigger_data = {
                 'Date Detected': datetime.now().strftime('%Y-%m-%d'),
                 'Lead': [lead_id],
-                'Company': [company_id],  # Link company
+                'Company': [company_id],
                 'Trigger Type': 'CONFERENCE_ATTENDANCE',
-                'Trigger Source': 'Conference Monitor',  # New standardized field
-                'Conference Name': conference_name,  # Add conference name
+                'Trigger Source': 'Conference Monitor',
+                'Conference Name': conference_name,
                 'Urgency': 'HIGH',
                 'Description': description,
                 'Outreach Angle': outreach_angle,
                 'Timing Recommendation': timing,
                 'Event Date': conference_date,
                 'Status': 'New',
-                'Sources': ', '.join(sources)  # Add sources
+                'Sources': ', '.join(sources)
             }
+            
+            # Generate trigger-specific outreach messages
+            logger.info(f"    Generating conference outreach messages...")
+            outreach = self._generate_conference_outreach(
+                lead_id=lead_id,
+                conference_name=conference_name,
+                conference_date=conference_date,
+                role_at_conference=role_at_conference,
+                session_topic=session_topic
+            )
+            
+            if outreach:
+                if outreach.get('email_subject'):
+                    trigger_data['Email Subject'] = outreach['email_subject']
+                if outreach.get('email_body'):
+                    trigger_data['Email Body'] = outreach['email_body']
+                if outreach.get('linkedin_connection'):
+                    trigger_data['LinkedIn Connection Request'] = outreach['linkedin_connection']
+                if outreach.get('linkedin_short'):
+                    trigger_data['LinkedIn Short Message'] = outreach['linkedin_short']
+                trigger_data['Outreach Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                logger.info(f"    ✓ Outreach messages generated")
+            else:
+                logger.warning(f"    ⚠ Could not generate outreach messages")
             
             self.trigger_history_table.create(trigger_data)
             return True
@@ -731,6 +1107,102 @@ Search and assess now."""
         except Exception as e:
             logger.error(f"    ✗ Failed to create trigger: {str(e)}")
             return False
+    
+    def _generate_conference_outreach(self, lead_id: str, conference_name: str,
+                                      conference_date: str, role_at_conference: str,
+                                      session_topic: str = None) -> Optional[Dict]:
+        """Generate conference-specific outreach messages"""
+        
+        # Get lead info
+        lead_name = "there"
+        lead_title = ""
+        company_name = ""
+        try:
+            lead_record = self.leads_table.get(lead_id)
+            lead_name = lead_record['fields'].get('Lead Name', 'there')
+            lead_title = lead_record['fields'].get('Title', '')
+            company_ids = lead_record['fields'].get('Company', [])
+            if company_ids:
+                company_record = self.companies_table.get(company_ids[0])
+                company_name = company_record['fields'].get('Company Name', '')
+        except:
+            pass
+        
+        # Build context
+        if session_topic:
+            context = f"Speaking at {conference_name} on '{session_topic}'"
+        else:
+            context = f"{role_at_conference} at {conference_name}"
+        
+        prompt = f"""Generate conference-specific outreach messages.
+
+CONFERENCE: {conference_name}
+DATE: {conference_date}
+THEIR ROLE: {role_at_conference}
+{f"SESSION TOPIC: {session_topic}" if session_topic else ""}
+
+LEAD:
+Name: {lead_name}
+Title: {lead_title}
+Company: {company_name}
+
+YOUR COMPANY: European biologics CDMO specializing in mammalian cell culture manufacturing
+
+Generate 3 SHORT messages to connect before/at the conference:
+
+1. EMAIL (80-100 words):
+Subject: [Reference conference naturally]
+- Mention you'll also be at the conference
+- Reference their session/role if applicable
+- Propose meeting for coffee/chat
+- Sign: "Best regards, [Your Name]"
+
+2. LINKEDIN CONNECTION (150-180 chars):
+- Reference the conference
+- Express interest in connecting there
+
+3. LINKEDIN SHORT MESSAGE (200-300 chars):
+- Reference their presence at conference
+- Mention interest in their work/session
+- Propose meeting up
+- Sign: "Best regards, [Your Name]"
+
+Return ONLY valid JSON:
+{{
+    "email_subject": "Subject line",
+    "email_body": "Email body",
+    "linkedin_connection": "Connection request",
+    "linkedin_short": "Short message"
+}}
+
+Return ONLY JSON."""
+
+        try:
+            message = self.anthropic_client.messages.create(
+                model=self.config['anthropic']['model'],
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            response_text = ""
+            for block in message.content:
+                if hasattr(block, 'text'):
+                    response_text += block.text
+            
+            if "```json" in response_text:
+                json_str = response_text.split("```json")[1].split("```")[0]
+            elif "{" in response_text:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                json_str = response_text[start:end]
+            else:
+                return None
+            
+            return json.loads(json_str.strip())
+            
+        except Exception as e:
+            logger.debug(f"Error generating conference outreach: {e}")
+            return None
     
     def check_duplicate_trigger(self, lead_id: str, conference_name: str) -> bool:
         """Check if trigger already exists for this lead and conference"""
