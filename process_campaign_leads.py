@@ -388,6 +388,7 @@ class CampaignLeadsProcessor:
                 'Date Detected': datetime.now().strftime('%Y-%m-%d'),
                 'Lead': [lead_record_id],
                 'Trigger Type': trigger_type,
+                'Trigger Source': 'Campaign Leads',  # New standardized field
                 'Urgency': 'MEDIUM',
                 'Description': description,
                 'Outreach Angle': outreach_angle,
