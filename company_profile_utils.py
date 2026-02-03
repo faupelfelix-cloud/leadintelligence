@@ -5,15 +5,201 @@ Company Profile utilities for outreach generation.
 Loads the Company Profile table from Airtable and builds context-aware
 value propositions matched to each prospect's situation.
 
-Also provides confidence-based field filtering so that low-confidence
-data never reaches outreach prompts.
+Also provides:
+- Confidence-based field filtering (low-confidence data never reaches prompts)
+- Persona classification (maps lead titles to persona buckets)
+- Persona-specific messaging (loads value drivers from Persona Messaging table)
 """
 
 import json
 import logging
+import re
 from typing import Dict, Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════
+# PERSONA CLASSIFICATION
+# ═══════════════════════════════════════════════════════════════
+# Maps lead titles to persona buckets. The buckets determine which
+# value drivers, proof points, and tone to use in outreach.
+
+PERSONA_BUCKETS = {
+    'C-Level / Owner': {
+        'keywords': [
+            'ceo', 'chief executive', 'founder', 'co-founder', 'cofounder',
+            'owner', 'managing director', 'president', 'chairman', 'chairwoman',
+            'general manager', 'coo', 'chief operating',
+        ],
+        'description': 'Top decision-makers who care about strategic fit, risk, and business impact',
+    },
+    'Operations / Manufacturing': {
+        'keywords': [
+            'cmc', 'manufacturing', 'production', 'operations', 'process development',
+            'process science', 'upstream', 'downstream', 'bioprocess', 'tech transfer',
+            'technical operations', 'plant manager', 'site director', 'fill finish',
+            'drug substance', 'drug product', 'ppq', 'validation', 'gmp',
+        ],
+        'description': 'Hands-on leaders who run manufacturing and care about execution capability',
+    },
+    'Quality / Regulatory': {
+        'keywords': [
+            'quality', 'qa ', 'qc ', 'quality assurance', 'quality control',
+            'regulatory', 'compliance', 'pharmacovigilance', 'gxp',
+            'qualified person', 'regulatory affairs', 'cqo', 'chief quality',
+        ],
+        'description': 'Guardians of compliance who need to trust your regulatory track record',
+    },
+    'Supply Chain / Procurement': {
+        'keywords': [
+            'supply chain', 'procurement', 'sourcing', 'purchasing', 'vendor',
+            'supplier', 'logistics', 'supply management', 'category manager',
+            'strategic sourcing', 'cpo', 'chief procurement',
+        ],
+        'description': 'Cost and reliability focused — they evaluate CDMOs on price, capacity, and risk',
+    },
+    'Business Development / Commercial': {
+        'keywords': [
+            'business development', 'commercial', 'marketing', 'sales',
+            'partnerships', 'alliance', 'licensing', 'market access',
+            'chief commercial', 'cbo', 'chief business',
+        ],
+        'description': 'Growth-focused leaders thinking about partnerships and market strategy',
+    },
+    'R&D / Scientific': {
+        'keywords': [
+            'r&d', 'research', 'scientific', 'scientist', 'cso', 'chief scientific',
+            'discovery', 'preclinical', 'biology', 'pharmacology', 'head of research',
+            'clinical development', 'cmo', 'chief medical', 'medical director',
+        ],
+        'description': 'Science-driven leaders — less focused on cost, more on capability and innovation',
+    },
+    'Program / Project Management': {
+        'keywords': [
+            'program', 'project', 'portfolio', 'pmo',
+            'project manager', 'program director', 'program lead',
+        ],
+        'description': 'Execution-focused — timelines, deliverables, hands-on coordination',
+    },
+    'Finance / Investment': {
+        'keywords': [
+            'cfo', 'chief financial', 'finance', 'investor relations',
+            'controller', 'treasurer', 'financial planning',
+        ],
+        'description': 'Numbers-driven — cost efficiency, capital deployment, ROI',
+    },
+}
+
+# Hardcoded fallback persona messaging — used when Persona Messaging table
+# is not available. This is the MINIMUM; the Airtable table should have
+# much richer content.
+DEFAULT_PERSONA_MESSAGING = {
+    'C-Level / Owner': {
+        'Value Drivers': 'Strategic fit, risk mitigation, speed to market, reliable partnership, cost efficiency at scale, partner who treats them as priority (not small fish at big CDMO)',
+        'Proof Points': 'Multinational pharma validated (Sandoz), 95% batch success rate, FDA+EMA+Anvisa approved, fast decision-making as mid-size partner, lower half of EU cost benchmarks',
+        'Tone': 'Strategic, concise, peer-to-peer. Lead with business impact. Respect their time — these are the busiest people. Get to the point fast.',
+        'What They Dont Want': 'Technical deep-dives, capability lists, feature dumps, aggressive sales tactics, long emails',
+        'Example Angles': """- Strategic fit: "For a biotech at your stage, having a manufacturing partner who can scale with you matters — we're set up for exactly that"
+- De-risking: "Locking in a validated manufacturing partner before Phase 3 removes a big variable from the equation"
+- Speed: "Our mid-size setup means faster decisions — no 6-month onboarding process"
+- Partner priority: "At a big CDMO, a program your size might not get priority. With us, every client gets direct access to leadership"
+- Cost efficiency: "We sit in the lower half of EU cost benchmarks — your runway stretches further without compromising quality"
+- Capital efficiency: "For a funded biotech, manufacturing spend is one of the biggest line items — getting it right matters"
+Keep messages SHORT for C-level. They skim.""",
+    },
+    'Operations / Manufacturing': {
+        'Value Drivers': 'PPQ experience and campaign execution, tech transfer speed and methodology, facility fit (500-2000L bioreactors, mammalian CHO), batch success rate (95%), GMP track record, operational flexibility, ability to handle complex molecules',
+        'Proof Points': 'Sandoz-qualified facilities (sets operational bar), 95% batch success rate, proven PPQ campaign execution, 500-2000L single-use and stainless steel bioreactors, structured tech transfer process with clear milestones, experience with mAbs/bispecifics/ADCs',
+        'Tone': 'Technical and practical. These people live in the details — they want specifics, not marketing. Lead with execution capability and relevant operational experience. Be concrete about what your facility can do.',
+        'What They Dont Want': 'Marketing fluff, vague promises, cost-only arguments, generic "we are a CDMO" pitches. They need to trust your EXECUTION capability before anything else.',
+        'Example Angles': """- PPQ: "We've run PPQ campaigns for mammalian products — happy to walk through our approach and timelines"
+- Tech transfer: "Our tech transfer process is structured with clear milestones — typically X months from kick-off to GMP"
+- Facility fit: "Our 500-2000L setup handles [their molecule type] well — we've done similar molecules"
+- Batch success: "95% batch success rate across our GMP campaigns — we track it closely"
+- Scale-up: "If you're moving from pilot to GMP, that transition is something we've done multiple times"
+- Complex molecules: "Bispecifics/ADCs have specific manufacturing challenges — our team has hands-on experience with those"
+- Operational flexibility: "As a mid-size CDMO, we can adapt to your process rather than forcing you into a platform"
+Pick the angle that best matches their specific operational situation.""",
+    },
+    'Quality / Regulatory': {
+        'Value Drivers': 'Regulatory track record (FDA/EMA/Anvisa approvals), inspection history, quality systems maturity, deviation handling capabilities, qualified person availability, documentation standards, comparability study experience',
+        'Proof Points': 'FDA approved, EMA approved, Anvisa approved, Sandoz qualification (multinational pharma-level quality bar), clean inspection history, 95% batch success rate as quality indicator, established quality management system',
+        'Tone': 'Precise, evidence-based, no exaggeration. Quality people are allergic to overclaiming. Understate rather than overstate. They respect facts and track records, not promises.',
+        'What They Dont Want': 'Marketing language, unsubstantiated claims, cost arguments (cost is irrelevant if quality is not proven first), aggressive sales language',
+        'Example Angles': """- Regulatory approvals: "We hold FDA, EMA, and Anvisa approvals — happy to share our inspection history"
+- Quality systems: "Our quality systems were built to Sandoz standards — the bar was set high from day one"
+- Inspection readiness: "We've had clean regulatory inspections — can walk you through our track record"
+- Documentation: "Our documentation and batch record standards are built for multinational pharma audits"
+- Deviation handling: "We have a mature CAPA system — deviation rates and resolution times are something we track closely"
+- Comparability: "If you need comparability studies for tech transfer, we've done that for several programs"
+- Qualified Person: "We have experienced QPs in-house for EU batch release"
+Pick the angle that best matches their specific quality/regulatory concern.""",
+    },
+    'Supply Chain / Procurement': {
+        'Value Drivers': 'Cost competitiveness (lower half of EU benchmarks), capacity availability and flexibility, lead times, supply reliability and continuity, dual sourcing value, transparent pricing',
+        'Proof Points': 'Lower half of EU cost benchmarks with pharma-grade quality, reliable capacity, EU-based manufacturing, flexible batch scheduling, long-term partnership pricing, multinational pharma validated (not a cheap/risky option)',
+        'Tone': 'Data-driven, commercial, straightforward. Procurement speaks numbers and risk. Give concrete cost positioning and capacity facts.',
+        'What They Dont Want': 'Technical jargon, capability presentations, vague "partnership" language, science deep-dives. They want facts on cost, capacity, and reliability.',
+        'Example Angles': """- Cost position: "We sit in the lower half of EU CDMO cost benchmarks — pharma-grade quality without the premium brand markup"
+- Dual sourcing: "If you're looking to diversify your manufacturing base, an EU-based second source could make sense"
+- Capacity: "We have capacity available for [timeframe] — happy to discuss batch scheduling"
+- Total cost: "When you factor in logistics, regulatory alignment, and communication overhead, our total cost of ownership is very competitive"
+- Pricing transparency: "Our pricing model is transparent — no hidden costs or surprise upcharges"
+- Supply security: "EU-based manufacturing means shorter supply chains and less exposure to shipping disruptions"
+This is the ONE persona where leading with cost makes sense. Be specific about cost positioning.""",
+    },
+    'Business Development / Commercial': {
+        'Value Drivers': 'Speed to market, manufacturing scalability for commercial launch, global supply strategy (EU base + FDA/EMA/Anvisa for global filing), partnership flexibility, COGS competitiveness for market positioning',
+        'Proof Points': 'FDA+EMA+Anvisa for global filing, clinical-to-commercial continuity, competitive pricing for market-competitive COGS, agile mid-size partner for fast decisions',
+        'Tone': 'Strategic and forward-looking. Think about their commercial goals and how manufacturing fits into their launch and partnership strategy.',
+        'What They Dont Want': 'Deep technical details, quality system descriptions, operational specifics. They want to know how you help them get to market and compete.',
+        'Example Angles': """- Global filing: "With FDA, EMA, and Anvisa approvals, your manufacturing is already set up for global filing — no second facility needed"
+- COGS: "Getting competitive COGS early helps your commercial positioning — our cost structure supports that"
+- Speed to market: "Manufacturing shouldn't be the bottleneck — our lead times and decision speed are built for biotech timelines"
+- Partnership flexibility: "If you're in licensing discussions, having a flexible manufacturing partner makes deal structuring easier"
+- Clinical to commercial: "We can take you from clinical supply through commercial without switching CDMOs — one tech transfer, not two"
+Pick the angle that matches their commercial stage and goals.""",
+    },
+    'R&D / Scientific': {
+        'Value Drivers': 'Scientific expertise in mammalian cell culture, process development capabilities, molecule-specific experience (mAbs, bispecifics, ADCs), analytical development, cell line development support, scientific collaboration model',
+        'Proof Points': 'CHO platform expertise, experience with complex molecules (bispecifics, ADCs), process development from gene to GMP, analytical method development and transfer, biosimilar development track record',
+        'Tone': 'Scientific, substantive. R&D people respect depth and specificity. Show you understand their molecule type and development challenges. Be a scientist talking to a scientist.',
+        'What They Dont Want': 'Cost-first arguments (irrelevant to them), generic CDMO pitches, marketing language, Sandoz name-dropping. Lead with SCIENCE, not price or credentials.',
+        'Example Angles': """- Process development: "Our PD team has experience developing processes for [their molecule type] — happy to discuss approach"
+- CHO platform: "We run a well-established CHO platform with good clone selection and cell line development capabilities"
+- Analytical: "We have in-house analytical development — method development and transfer is something we handle end-to-end"
+- Complex molecules: "Bispecifics/ADCs come with specific development challenges — our team has worked through those before"
+- Biosimilar: "If it's a biosimilar program, we have gene-to-market experience in that space"
+- Scientific collaboration: "We prefer to work as a scientific partner, not just execute a fixed protocol — our PD team engages deeply"
+- Scale-up science: "Moving from bench to GMP scale is where a lot of programs stumble — our PD team focuses on de-risking that transition"
+Pick the angle that matches their specific development stage and molecule type.""",
+    },
+    'Program / Project Management': {
+        'Value Drivers': 'Clear timelines and milestones, communication quality and frequency, project management methodology, hands-on support, transparency on progress and issues, dedicated project team',
+        'Proof Points': 'Dedicated project managers per program, proactive communication style, structured tech transfer process with clear milestones, agile mid-size organization means fast decisions and escalation',
+        'Tone': 'Practical and organized. They want to know you will deliver on time and communicate proactively. Show you understand project execution.',
+        'What They Dont Want': 'High-level strategy talk, corporate presentations, vague timelines, cost-first arguments. Be specific about HOW you work.',
+        'Example Angles': """- Project structure: "Every program gets a dedicated PM and defined milestone plan — no guessing where things stand"
+- Communication: "We do regular progress updates and flag issues proactively — no surprises"
+- Timelines: "Tech transfer to first GMP batch typically takes X months — we can walk through the milestone plan"
+- Escalation: "As a mid-size organization, escalation paths are short — decisions happen in days, not weeks"
+- Transparency: "We share real-time progress dashboards — you always know where your program stands"
+These people are your day-to-day interface. Show them you're easy to work with.""",
+    },
+    'Finance / Investment': {
+        'Value Drivers': 'Cost efficiency and capital preservation, predictable pricing, transparent cost structure, long-term cost trajectory, manufacturing COGS impact on company valuation and fundraising narrative',
+        'Proof Points': 'Lower half of EU cost benchmarks, transparent pricing model, no hidden costs, capital-efficient manufacturing for funded biotechs, competitive COGS for commercial viability',
+        'Tone': 'Numbers-focused, ROI-oriented. Finance people want to understand financial impact. Be concrete about cost positioning. They think in spreadsheets.',
+        'What They Dont Want': 'Technical jargon, vague "value" claims without numbers, science deep-dives, marketing language. Lead with financial impact.',
+        'Example Angles': """- Cost positioning: "We're in the lower half of EU CDMO cost benchmarks — meaningful savings vs premium CDMOs"
+- Capital efficiency: "For a biotech deploying VC capital, manufacturing is a major line item — getting competitive pricing without sacrificing quality directly impacts runway"
+- COGS: "Competitive manufacturing COGS strengthens your commercial case and valuation narrative"
+- Predictability: "Our pricing is transparent and predictable — no hidden costs or surprise change orders"
+- Comparison: "If you benchmark us against Lonza/Samsung/Fujifilm tier, you'll see a significant cost delta for equivalent quality standards"
+This persona responds to concrete numbers and comparisons.""",
+    },
+}
 
 # === CONFIDENCE FIELD MAPPING ===
 # Maps Data Confidence JSON keys → Airtable field names that should be suppressed
@@ -120,6 +306,89 @@ def suppressed_to_do_not_mention(suppressed: List[str]) -> str:
     return "\n⚠️ DO NOT MENTION (low confidence / unverified): " + ", ".join(topics)
 
 
+# ═══════════════════════════════════════════════════════════════
+# PERSONA CLASSIFICATION & MESSAGING
+# ═══════════════════════════════════════════════════════════════
+
+def classify_persona(lead_title: str) -> str:
+    """Classify a lead's job title into a persona bucket.
+    
+    Uses keyword matching against PERSONA_BUCKETS. Falls back to 
+    'General' if no match found. Handles compound titles like
+    'VP Manufacturing & Quality' by picking the most specific match.
+    
+    Args:
+        lead_title: The lead's job title string
+        
+    Returns:
+        Persona bucket name (e.g., 'Operations / Manufacturing')
+    """
+    if not lead_title:
+        return 'General'
+    
+    title_lower = lead_title.lower().strip()
+    
+    # Score each bucket by how many keywords match
+    scores = {}
+    for bucket_name, bucket_info in PERSONA_BUCKETS.items():
+        score = 0
+        for keyword in bucket_info['keywords']:
+            # Use word boundary matching for short keywords to avoid false positives
+            if len(keyword) <= 3:
+                # Short keywords like 'qa', 'qc', 'cfo' — need boundary
+                if re.search(r'\b' + re.escape(keyword) + r'\b', title_lower):
+                    score += 2  # Exact short match is strong signal
+            elif keyword in title_lower:
+                score += 1
+        if score > 0:
+            scores[bucket_name] = score
+    
+    if not scores:
+        return 'General'
+    
+    # Return the bucket with the highest score
+    return max(scores, key=scores.get)
+
+
+def load_persona_messaging(base) -> Dict:
+    """Load Persona Messaging table from Airtable.
+    
+    The table should have rows for each persona bucket with columns:
+    - Persona (text) — matches bucket name from PERSONA_BUCKETS
+    - Value Drivers (long text) — what this persona cares about
+    - Proof Points (long text) — Rezon proof points relevant to this persona
+    - Tone (long text) — how to write to this persona
+    - What They Dont Want (long text) — what to avoid
+    - Example Angles (long text) — specific talking point ideas
+    
+    Falls back to DEFAULT_PERSONA_MESSAGING if table doesn't exist.
+    
+    Args:
+        base: pyairtable Base object
+        
+    Returns:
+        Dict keyed by persona name → fields dict
+    """
+    try:
+        table = base.table('Persona Messaging')
+        records = table.all()
+        if records:
+            messaging = {}
+            for record in records:
+                fields = record['fields']
+                persona_name = fields.get('Persona', '').strip()
+                if persona_name:
+                    messaging[persona_name] = fields
+            logger.info(f"✓ Persona Messaging loaded: {len(messaging)} personas ({', '.join(messaging.keys())})")
+            return messaging
+        else:
+            logger.info("Persona Messaging table is empty — using defaults")
+            return DEFAULT_PERSONA_MESSAGING
+    except Exception as e:
+        logger.debug(f"Could not load Persona Messaging table: {e} — using defaults")
+        return DEFAULT_PERSONA_MESSAGING
+
+
 def load_company_profile(base) -> Dict:
     """Load Company Profile from Airtable.
     
@@ -144,17 +413,23 @@ def load_company_profile(base) -> Dict:
 
 
 def build_value_proposition(profile: Dict, company_fields: Dict = None, 
-                            lead_title: str = '', campaign_type: str = '') -> str:
+                            lead_title: str = '', campaign_type: str = '',
+                            persona_messaging: Dict = None) -> str:
     """Build a targeted value proposition section for the outreach prompt.
     
     Matches Rezon's specific strengths to the prospect's situation based on
     their pipeline stage, funding, technology, geography, and the lead's role.
+    
+    The persona messaging is the PRIMARY driver — it determines which value
+    drivers and proof points the AI should lead with. The segment/geography
+    data is SECONDARY context.
     
     Args:
         profile: Company Profile fields from Airtable
         company_fields: Prospect's company data (enriched)
         lead_title: The lead's job title
         campaign_type: Campaign type (Conference, Roadshow, general)
+        persona_messaging: Dict from load_persona_messaging()
         
     Returns:
         String to inject into the outreach prompt
@@ -178,12 +453,14 @@ FDA approved, 95% batch success rate. Quality is uncompromised.
     positioning = profile.get('Positioning Statement', 
         'EU/US cost leader for New Biological Entities (NBEs)')
     
-    # === DETERMINE PROSPECT SEGMENT ===
-    # Use pipeline stage and funding to pick the right value angle
-    segment_pitch = _match_segment_pitch(profile, safe_fields)
+    # === PERSONA-SPECIFIC ANGLE (PRIMARY) ===
+    # This is the MAIN driver of the message — determines what to lead with
+    persona_angle = _match_persona_angle(profile, lead_title, persona_messaging)
+    persona_bucket = classify_persona(lead_title)
     
-    # === PERSONA-SPECIFIC ANGLE ===
-    persona_angle = _match_persona_angle(profile, lead_title)
+    # === DETERMINE PROSPECT SEGMENT (SECONDARY CONTEXT) ===
+    # Adds context about their stage, but persona angle takes priority
+    segment_pitch = _match_segment_pitch(profile, safe_fields)
     
     # === SELECT PROOF POINTS ===
     # Pick 2-3 most relevant proof points based on prospect context
@@ -211,25 +488,43 @@ FDA approved, 95% batch success rate. Quality is uncompromised.
     weaknesses = profile.get('Key Weaknesses', '')
     
     # === BUILD THE PROMPT SECTION ===
+    # Persona is PRIMARY — it goes first and determines the message angle.
+    # Segment, geography, and proof points are secondary context.
     section = f"""
+═══════════════════════════════════════════════════════════
+⚡ CRITICAL: YOUR MESSAGE MUST BE SHAPED BY THIS PERSONA
+═══════════════════════════════════════════════════════════
+{persona_angle}
+
 YOUR COMPANY — REZON BIO:
 {positioning}
 
-WHAT'S IN IT FOR THEM — match ONE of these to their situation:
+RULES FOR USING THE ABOVE:
+- The PERSONA section determines WHAT you lead with and which proof points you use
+- The REZON BIO section is background context, NOT the default message
+- If the persona says "PPQ experience matters" → lead with PPQ, NOT cost
+- If the persona says "regulatory track record" → lead with FDA/EMA approvals, NOT cost
+- If the persona says "scientific expertise" → lead with CHO platform and molecule experience, NOT Sandoz
+- Only use cost/pricing as the lead angle for Procurement, Finance, or C-Level personas
+- NEVER use the same angle (cost + Sandoz + quality) for every persona — this is the #1 mistake
+
+THEIR STAGE (add context if it sharpens your angle):
 {segment_pitch}
 
-{persona_angle}
-
-PROOF POINTS (weave ONE in naturally, don't list them):
+ADDITIONAL PROOF POINTS (use ONLY if persona proof points don't already cover it):
 {proof_points}
 
 {pain_points}
 
-COMPETITIVE ANGLE (use if relevant):
+COMPETITIVE ANGLE (use if it fits what THIS persona cares about):
 {diff_angle}
 
-KEY MESSAGE (pick the most fitting one):
-{chr(10).join('- ' + m for m in primary_msgs[:4]) if primary_msgs else '- European quality and trust at competitive pricing'}
+KEY MESSAGE (pick the one that fits THIS PERSONA best):
+{chr(10).join('- ' + m for m in primary_msgs[:4]) if primary_msgs else '- Best cost-for-value in the EU: pharma-grade quality without the premium CDMO price tag'}
+
+⚠️ SELF-CHECK: Before writing, ask yourself: "Would a {persona_bucket} person 
+actually care about what I'm leading with?" If you're leading with cost for an 
+Operations VP, START OVER. If you're leading with Sandoz for an R&D Director, START OVER.
 
 ⚠️ HONESTY GUARDRAILS — do NOT overpromise on:
 {weaknesses[:300] if weaknesses else '- We are building our CDMO track record — be authentic about this'}
@@ -398,45 +693,59 @@ def _match_segment_pitch(profile: Dict, company_fields: Dict) -> str:
     return '\n'.join(segments)
 
 
-def _match_persona_angle(profile: Dict, lead_title: str) -> str:
-    """Pick messaging angle based on the lead's role."""
-    title_lower = (lead_title or '').lower()
+def _match_persona_angle(profile: Dict, lead_title: str, 
+                         persona_messaging: Dict = None) -> str:
+    """Build persona-specific messaging section for the outreach prompt.
     
-    if any(x in title_lower for x in ['ceo', 'founder', 'chief executive', 'president', 'coo']):
-        return """PERSONA: C-SUITE / FOUNDER
-They care about: cost efficiency, speed to market, reliable partnership, risk mitigation
-They DON'T want: technical deep-dives, capability lists
-Approach: Business impact, strategic fit, trustworthiness"""
+    Uses classify_persona() to bucket the title, then pulls specific
+    value drivers, proof points, and tone from the Persona Messaging data.
     
-    elif any(x in title_lower for x in ['cmc', 'manufacturing', 'technical', 'process', 'production']):
-        return """PERSONA: CMC / MANUFACTURING LEADER
-They care about: tech transfer speed, regulatory compliance, facility quality, scale capability
-They DON'T want: vague promises, marketing fluff
-Approach: Practical specifics, regulatory credentials (FDA/EMA), Sandoz qualification"""
+    Args:
+        profile: Company Profile fields (unused currently, reserved for future)
+        lead_title: The lead's job title
+        persona_messaging: Dict from load_persona_messaging()
     
-    elif any(x in title_lower for x in ['supply', 'procurement', 'sourcing']):
-        return """PERSONA: SUPPLY CHAIN / PROCUREMENT
-They care about: cost, capacity availability, lead times, supply reliability, dual sourcing
-They DON'T want: technical jargon, capability presentations
-Approach: Cost competitiveness, EU supply security, capacity availability"""
+    Returns:
+        Rich persona messaging block for the prompt
+    """
+    persona = classify_persona(lead_title)
     
-    elif any(x in title_lower for x in ['vp', 'svp', 'evp', 'director', 'head']):
-        return """PERSONA: VP / DIRECTOR LEVEL
-They care about: proven track record, practical solutions, data-driven decisions
-They DON'T want: fluff, overpromising, aggressive sales tactics
-Approach: Evidence-based, reference relevant experience, respect their expertise"""
-    
-    elif any(x in title_lower for x in ['program', 'project', 'lead']):
-        return """PERSONA: PROGRAM / PROJECT LEAD
-They care about: timelines, deliverables, hands-on support, communication quality
-They DON'T want: high-level strategy talk, corporate presentations
-Approach: Practical, specific to their program needs, offer to discuss details"""
-    
+    # Get messaging for this persona
+    if persona_messaging and persona in persona_messaging:
+        msg = persona_messaging[persona]
+    elif persona in DEFAULT_PERSONA_MESSAGING:
+        msg = DEFAULT_PERSONA_MESSAGING[persona]
     else:
-        return """PERSONA: BIOTECH PROFESSIONAL
-They appreciate: Data, facts, evidence, practical solutions
-They dislike: Fluff, excessive marketing speak, overpromising
-Approach: Professional, specific, value-driven"""
+        msg = DEFAULT_PERSONA_MESSAGING.get('C-Level / Owner', {})
+    
+    value_drivers = msg.get('Value Drivers', 'Strategic fit, reliability, quality')
+    proof_points = msg.get('Proof Points', 'Sandoz-qualified, FDA approved, 95% batch success rate')
+    tone = msg.get('Tone', 'Professional and direct')
+    dont_want = msg.get('What They Dont Want', 'Marketing fluff, overpromising')
+    example_angles = msg.get('Example Angles', '')
+    
+    section = f"""PERSONA: {persona.upper()}
+Lead title: {lead_title}
+
+WHAT THIS PERSON VALUES — shape your message around THESE (not generic cost/Sandoz talking points):
+{value_drivers}
+
+PROOF POINTS TO USE FOR THIS PERSONA (pick the 1-2 most relevant):
+{proof_points}
+
+TONE GUIDANCE:
+{tone}
+
+DO NOT lead with or emphasize:
+{dont_want}"""
+    
+    if example_angles:
+        section += f"""
+
+SPECIFIC ANGLE IDEAS for this persona (pick the best fit for their company situation):
+{example_angles}"""
+    
+    return section
 
 
 def _select_proof_points(profile: Dict, company_fields: Dict) -> str:
@@ -532,3 +841,67 @@ def _match_differentiation(diff_text: str, company_fields: Dict) -> str:
         return "VS. Premium EU CDMOs (Lonza, Samsung, Fujifilm): Same pharma-grade quality, but lower half of cost benchmarks. Faster decision-making, more personalized service, no 'small fish in a big pond' problem."
     
     return "KEY DIFFERENTIATOR: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Quality is uncompromised; it's the overhead and pricing model that's different."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
