@@ -1299,7 +1299,7 @@ Title: {lead_title}
 
 Generate 4 messages for initial outreach:
 
-1. EMAIL (60-80 words max):
+1. EMAIL (100-120 words):
 Subject: [Natural, short]
 - Start with THEIR world, connect ONE Rezon strength to their situation
 - Soft CTA
@@ -1312,7 +1312,7 @@ Subject: [Natural, short]
 - After connection. Conversational.
 - Sign: "Best regards, [Your Name]"
 
-4. LINKEDIN INMAIL (60-80 words max):
+4. LINKEDIN INMAIL (100-120 words):
 Subject: [Natural, not salesy]
 - Observation about their work, why connecting makes sense
 - Sign: "Best regards, [Your Name], Rezon Bio Business Development"
@@ -1512,7 +1512,7 @@ The conference is the REASON for reaching out — use it as a natural hook.
 
 Generate 3 SHORT messages to connect before/at the conference:
 
-1. EMAIL (60-80 words max):
+1. EMAIL (100-120 words):
 Subject: [Reference conference naturally]
 - Mention you'll also be at the conference
 - Reference their session/role if applicable
