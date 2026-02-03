@@ -994,7 +994,7 @@ This is VERSION {new_version} of the outreach. {version_note}
 
 Generate FOUR messages:
 
-1. EMAIL (60-80 words max)
+1. EMAIL (100-120 words)
 Subject: [Natural, short]
 Body: Start with THEIR world, connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
@@ -1006,7 +1006,7 @@ Brief, friendly. No signature.
 After connection. Conversational.
 Sign: "Best regards, [Your Name], Rezon Bio BD"
 
-4. LINKEDIN INMAIL (60-80 words max)
+4. LINKEDIN INMAIL (100-120 words)
 Subject: [Not salesy]
 Body: Observation about their work, why meeting makes sense for THEM
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
@@ -1142,10 +1142,10 @@ OUTREACH APPROACH:
 - One proof point max, woven in naturally
 - Sound like a knowledgeable peer, not a salesperson
 - NEVER mention specific funding amounts unless in trigger details above
-- 60-80 words max per message
+- 100-120 words per message
 
 Generate:
-1. EMAIL (60-80 words, Subject + Body, sign as [Your Name], Rezon Bio BD)
+1. EMAIL (100-120 words, Subject + Body, sign as [Your Name], Rezon Bio BD)
 2. LINKEDIN CONNECTION (under 200 chars)
 
 Return ONLY valid JSON:
