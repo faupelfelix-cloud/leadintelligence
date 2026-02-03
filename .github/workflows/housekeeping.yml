@@ -1,7 +1,6 @@
 name: Housekeeping
 
 on:
-  # Manual trigger
   workflow_dispatch:
     inputs:
       mode:
@@ -9,28 +8,39 @@ on:
         required: true
         type: choice
         options:
+          - 'Audit (zero AI cost — read-only report)'
           - 'Screen Only (dry-run report)'
           - 'Full Housekeeping'
+          - 'Full Housekeeping (parallel)'
           - 'Companies Only'
+          - 'Companies Only (parallel)'
           - 'Leads Only'
+          - 'Leads Only (parallel)'
           - 'Outreach Only'
+          - 'Outreach Only (parallel)'
       confidence_threshold:
-        description: 'Confidence threshold (default: 85, range 0-100)'
+        description: 'Confidence threshold (default: 85)'
         required: false
         type: string
         default: '85'
-      limit:
-        description: 'Limit records per category (default: unlimited)'
+      batch_size:
+        description: 'Records per batch (default: 200, for parallel: per job)'
         required: false
         type: string
-        default: ''
+        default: '200'
   
-  # Weekly schedule — runs every Sunday at 3am UTC
+  # Weekly schedule — full housekeeping Sunday 3am UTC
   schedule:
     - cron: '0 3 * * 0'
 
+# ════════════════════════════════════════════════════════════
+# SINGLE-RUN JOBS (audit, screen, non-parallel)
+# ════════════════════════════════════════════════════════════
 jobs:
-  housekeeping:
+  single-run:
+    if: >-
+      github.event_name == 'schedule' ||
+      !contains(github.event.inputs.mode, 'parallel')
     runs-on: ubuntu-latest
     timeout-minutes: 350
     
@@ -44,36 +54,27 @@ jobs:
         python-version: '3.11'
     
     - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
+      run: pip install -r requirements.txt
     
-    - name: Create config from secrets
+    - name: Create config
       env:
         AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
         AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      run: |
-        python setup.py
+      run: python setup.py
     
     - name: Run housekeeping
-      env:
-        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       run: |
         MODE="${{ github.event.inputs.mode || 'Full Housekeeping' }}"
         THRESHOLD="${{ github.event.inputs.confidence_threshold || '85' }}"
-        LIMIT="${{ github.event.inputs.limit }}"
+        BATCH_SIZE="${{ github.event.inputs.batch_size || '200' }}"
         
-        # Build command
-        CMD="python housekeeping.py --confidence-threshold $THRESHOLD"
+        CMD="python housekeeping.py --confidence-threshold $THRESHOLD --limit $BATCH_SIZE"
         
-        if [ -n "$LIMIT" ]; then
-          CMD="$CMD --limit $LIMIT"
-        fi
-        
-        if [ "$MODE" = "Screen Only (dry-run report)" ]; then
-          CMD="$CMD --screen-only"
+        if [ "$MODE" = "Audit (zero AI cost — read-only report)" ]; then
+          CMD="python housekeeping.py --audit"
+        elif [ "$MODE" = "Screen Only (dry-run report)" ]; then
+          CMD="python housekeeping.py --screen-only --confidence-threshold $THRESHOLD"
         elif [ "$MODE" = "Companies Only" ]; then
           CMD="$CMD --companies-only"
         elif [ "$MODE" = "Leads Only" ]; then
@@ -81,11 +82,11 @@ jobs:
         elif [ "$MODE" = "Outreach Only" ]; then
           CMD="$CMD --outreach-only"
         fi
-        # "Full Housekeeping" uses no extra flags
+        # "Full Housekeeping" uses base CMD (no extra flags)
         
         echo "============================================================"
         echo "HOUSEKEEPING: $MODE"
-        echo "Threshold: $THRESHOLD | Limit: ${LIMIT:-unlimited}"
+        echo "Threshold: $THRESHOLD | Batch size: $BATCH_SIZE"
         echo "Command: $CMD"
         echo "============================================================"
         
@@ -96,5 +97,71 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: housekeeping-log-${{ github.run_id }}
+        path: housekeeping.log
+        retention-days: 30
+
+  # ════════════════════════════════════════════════════════════
+  # PARALLEL JOBS (10 concurrent batches)
+  # ════════════════════════════════════════════════════════════
+  parallel-run:
+    if: contains(github.event.inputs.mode, 'parallel')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    
+    - name: Create config
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: python setup.py
+    
+    - name: Process batch
+      run: |
+        MODE="${{ github.event.inputs.mode }}"
+        THRESHOLD="${{ github.event.inputs.confidence_threshold || '85' }}"
+        BATCH_SIZE="${{ github.event.inputs.batch_size || '200' }}"
+        BATCH="${{ matrix.batch }}"
+        OFFSET=$((BATCH * BATCH_SIZE))
+        
+        CMD="python housekeeping.py --confidence-threshold $THRESHOLD --limit $BATCH_SIZE --offset $OFFSET"
+        
+        if [[ "$MODE" == *"Companies"* ]]; then
+          CMD="$CMD --companies-only"
+        elif [[ "$MODE" == *"Leads"* ]]; then
+          CMD="$CMD --leads-only"
+        elif [[ "$MODE" == *"Outreach"* ]]; then
+          CMD="$CMD --outreach-only"
+        fi
+        # "Full Housekeeping (parallel)" uses no extra flags
+        
+        echo "============================================================"
+        echo "BATCH $BATCH: offset=$OFFSET, limit=$BATCH_SIZE"
+        echo "Mode: $MODE | Threshold: $THRESHOLD"
+        echo "Command: $CMD"
+        echo "============================================================"
+        
+        eval $CMD
+    
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: housekeeping-batch-${{ matrix.batch }}-${{ github.run_id }}
         path: housekeeping.log
         retention-days: 30
