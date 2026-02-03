@@ -25,6 +25,7 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
+from company_profile_utils import load_company_profile, build_value_proposition, build_outreach_philosophy
 
 # Configure logging FIRST
 logging.basicConfig(
@@ -81,6 +82,9 @@ class CampaignLeadsProcessor:
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
         )
+        
+        # Load company profile for outreach personalization
+        self.company_profile = load_company_profile(self.base)
         
         logger.info("✓ CampaignLeadsProcessor initialized (inline enrichment mode)")
     
@@ -455,14 +459,23 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
+            # Helper function to sanitize AI output (curly quotes, smart quotes)
+            def sanitize_val(s):
+                if not isinstance(s, str):
+                    return s
+                for ch in '\u201c\u201d\u2018\u2019\u201a\u201b\u201f\u300c\u300d\u300e\u300f\u301d\u301e\uff02\uff07':
+                    s = s.replace(ch, '')
+                return s.strip('"\'').strip()
+            
             # Helper function to validate single select
             def validate_single(value, valid_options, default='Unknown'):
                 if not value:
                     return default
+                value = sanitize_val(str(value))
                 if value in valid_options:
                     return value
                 for opt in valid_options:
-                    if opt.lower() == str(value).lower():
+                    if opt.lower() == value.lower():
                         return opt
                 return default
             
@@ -921,21 +934,23 @@ Return ONLY JSON."""
         """Generate generic outreach messages for the Lead record (not campaign-specific).
         
         Fetches company context from the linked company record for better personalization.
+        Uses Company Profile for value proposition matching.
         """
         
         # Fetch company context for personalization
         company_context = "Biotech company"
+        company_fields = {}
         try:
             lead_record = self.leads_table.get(lead_id)
             company_ids = lead_record['fields'].get('Company', [])
             if company_ids:
                 company_record = self.companies_table.get(company_ids[0])
-                cf = company_record['fields']
+                company_fields = company_record['fields']
                 parts = []
-                tech = cf.get('Technology Platform', [])
+                tech = company_fields.get('Technology Platform', [])
                 if tech:
                     parts.append(f"Technology: {', '.join(tech) if isinstance(tech, list) else tech}")
-                ta = cf.get('Therapeutic Areas', [])
+                ta = company_fields.get('Therapeutic Areas', [])
                 if ta:
                     parts.append(f"Focus: {', '.join(ta) if isinstance(ta, list) else ta}")
                 if parts:
@@ -943,7 +958,11 @@ Return ONLY JSON."""
         except:
             pass
         
-        prompt = f"""Generate professional outreach messages for this lead.
+        # Build value proposition matched to this prospect
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        outreach_rules = build_outreach_philosophy()
+        
+        prompt = f"""Generate personalized outreach messages for this lead.
 
 LEAD:
 Name: {lead_name}
@@ -953,34 +972,26 @@ Company: {company_name}
 COMPANY BACKGROUND (verified):
 {company_context}
 
-YOUR COMPANY: European biologics CDMO specializing in mammalian cell culture manufacturing (mAbs, bispecifics, ADCs)
-
-═══════════════════════════════════════════════════════════
-RULES:
-═══════════════════════════════════════════════════════════
-- NEVER mention specific funding amounts or rounds
-- NEVER claim specific pipeline stages unless listed above
-- NEVER mention CDMO partnerships
-- Pick ONE relevant detail max
-- Keep messages short and natural
+{value_prop}
+{outreach_rules}
 
 Generate 4 messages:
 
 1. EMAIL (60-80 words max):
 Subject: [Short, professional]
-Body: Brief intro, one relevant detail about their work, soft CTA
+Body: Start with their world, connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name]"
 
 2. LINKEDIN CONNECTION (under 200 chars):
-Why you'd like to connect, professional tone
+Why you'd like to connect — reference their role or work
 
 3. LINKEDIN SHORT MESSAGE (under 300 chars):
-Relevant to their role, brief value mention
+After connection. Relevant to their role, brief value mention
 Sign: "Best regards, [Your Name]"
 
 4. LINKEDIN INMAIL (60-80 words max):
 Subject: [Natural, not salesy]
-Body: Conversational, references their work
+Body: Observation about their work, why meeting makes sense for THEM
 Sign: "Best regards, [Your Name]"
 
 Return ONLY valid JSON:
@@ -1305,7 +1316,7 @@ CAMPAIGN CONTEXT: {campaign_background}
 Use this context as the natural reason for reaching out.
 """
         
-        prompt = f"""You are writing business development outreach for a European biologics CDMO.
+        prompt = f"""You are writing business development outreach for Rezon Bio, a European biologics CDMO.
 
 LEAD: {name}, {title} at {company} ({location})
 
@@ -1313,27 +1324,8 @@ COMPANY BACKGROUND (verified):
 {company_context_text}
 {do_not_mention_text}
 {campaign_section}
-REZON BIO (your company):
-European CDMO specializing in mammalian CHO cell culture for mAbs, bispecifics, and ADCs.
-Target: Mid-size biotechs needing manufacturing support.
-
-═══════════════════════════════════════════════════════════
-STYLE RULES — CRITICAL:
-═══════════════════════════════════════════════════════════
-1. **Natural, human language** — slightly imperfect is fine
-2. **NO bullet lists** — weave points into sentences
-3. **NO **bold** markup** — clean formatting only
-4. **Show you know them, don't tell them their situation**
-   BAD: "Your company focuses on oncology and has Phase 2 programs"
-   GOOD: "Given your work in oncology..."
-5. **About THEM, not about us** — lead with their context
-6. **Soft CTA** — "would be great to connect" not "let's schedule a call"
-7. **Pick ONE relevant detail max** — do NOT stack multiple company facts
-8. **Sound like a human wrote it** — not an AI that scraped their LinkedIn
-9. **NEVER mention specific funding amounts or rounds**
-10. **NEVER claim specific pipeline stages** unless listed above as verified
-11. **NEVER mention CDMO partnerships or manufacturing decisions**
-12. **Keep messages SHORT** — less is more
+{build_value_proposition(self.company_profile, company_fields, title, campaign_type)}
+{build_outreach_philosophy()}
 
 ═══════════════════════════════════════════════════════════
 GENERATE FOUR MESSAGES:
@@ -1341,7 +1333,7 @@ GENERATE FOUR MESSAGES:
 
 MESSAGE 1: EMAIL (60-80 words max — HARD LIMIT)
 Subject: [Natural, short, references context or conference]
-Body: Brief, conversational, ONE detail max, soft CTA
+Body: Start with THEIR world (their work, stage, or challenge), connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name]"
 
 MESSAGE 2: LINKEDIN CONNECTION (under 200 chars)
@@ -1350,7 +1342,7 @@ No signature
 
 MESSAGE 3: LINKEDIN INMAIL 
 Subject: [Natural, not salesy]
-Body: 60-80 words max, conversational
+Body: 60-80 words max. Open with observation about their work, connect to why Rezon is relevant for THEM specifically
 Sign: "Best, [Your Name]"
 
 MESSAGE 4: LINKEDIN SHORT (under 180 chars)
