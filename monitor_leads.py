@@ -754,7 +754,7 @@ Lead with the trigger — this event is WHY you're reaching out NOW.
 
 Generate 3 messages:
 
-1. EMAIL (60-80 words max):
+1. EMAIL (100-120 words):
 Subject: [Natural subject referencing the trigger]
 - Reference the trigger naturally (NOT "Congratulations on...")
 - Connect ONE Rezon strength to their situation
