@@ -36,6 +36,9 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Import fuzzy matching utilities
 try:
@@ -344,7 +347,7 @@ class MarketNewsIntelligence:
         self.competitors_table = self._init_table('Competitors')
         
         # Company Profile
-        self.company_profile = self._load_company_profile()
+        self.company_profile = load_company_profile(self.base)
         
         # API client
         self.anthropic_client = anthropic.Anthropic(
@@ -387,19 +390,6 @@ class MarketNewsIntelligence:
         except:
             logger.warning(f"Table '{table_name}' not found")
             return None
-    
-    def _load_company_profile(self) -> Dict:
-        """Load company profile for context"""
-        try:
-            table = self.base.table('Company Profile')
-            records = table.all()
-            if records:
-                profile = records[0].get('fields', {})
-                logger.info("Company Profile loaded")
-                return profile
-        except Exception as e:
-            logger.warning(f"Could not load Company Profile: {e}")
-        return {}
     
     def _load_trigger_points(self) -> List[Dict]:
         """Load trigger points from table or use defaults"""
@@ -1482,10 +1472,19 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
+            # Helper function to sanitize AI output (curly quotes, smart quotes)
+            def sanitize_val(s):
+                if not isinstance(s, str):
+                    return s
+                for ch in '\u201c\u201d\u2018\u2019\u201a\u201b\u201f\u300c\u300d\u300e\u300f\u301d\u301e\uff02\uff07':
+                    s = s.replace(ch, '')
+                return s.strip('"\'').strip()
+            
             # Helper function to validate single select
             def validate_single(value, valid_options, default='Unknown'):
                 if not value:
                     return default
+                value = sanitize_val(value)
                 if value in valid_options:
                     return value
                 # Try case-insensitive match
@@ -1916,10 +1915,22 @@ Return ONLY JSON."""
                                   company_name: str, lead_icp: int, company_icp: int):
         """Generate outreach messages - inline implementation"""
         
-        # Get company profile for context
-        our_company = "European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs)"
-        if self.company_profile:
-            our_company = self.company_profile.get('Capabilities', our_company)
+        # Fetch and filter company data
+        company_fields = {}
+        do_not_mention_text = ""
+        try:
+            lead_record = self.leads_table.get(lead_id)
+            company_ids = lead_record['fields'].get('Company', [])
+            if company_ids:
+                raw_fields = self.companies_table.get(company_ids[0])['fields']
+                company_fields, suppressed = filter_by_confidence(raw_fields)
+                do_not_mention_text = suppressed_to_do_not_mention(suppressed)
+        except:
+            pass
+        
+        # Build value proposition and philosophy
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate professional outreach messages for this lead.
 
@@ -1929,35 +1940,31 @@ Title: {lead_title}
 Company: {company_name}
 Lead ICP Score: {lead_icp}/100
 Company ICP Score: {company_icp}/90
+{do_not_mention_text}
 
-YOUR COMPANY:
-{our_company}
-- European CDMO with Sandoz-qualified facilities
-- Focus: Mid-size biotechs in Phase 2/3 or commercial
-- Strengths: Cost-efficient European quality, agile partner
+{value_prop}
+
+{outreach_rules}
 
 Generate 4 messages:
 
-1. EMAIL (120-150 words):
+1. EMAIL (60-80 words max):
 Subject: [Natural subject line]
-- Conversational opener referencing their role/company
-- Why you might be relevant (no bullet lists)
+- Start with THEIR world, connect ONE Rezon strength to their situation
 - Soft CTA
 - Sign: "Best regards, [Your Name], Business Development"
 
-2. LINKEDIN CONNECTION (180-200 chars):
+2. LINKEDIN CONNECTION (under 200 chars):
 - Brief, friendly, reference their role
 
-3. LINKEDIN SHORT MESSAGE (300-400 chars):
+3. LINKEDIN SHORT MESSAGE (under 300 chars):
 - For after connection accepted
 - Conversational, reference their background
 - End: "Best regards, [Your Name]"
 
-4. LINKEDIN INMAIL (250-350 words):
+4. LINKEDIN INMAIL (60-80 words max):
 Subject: [Natural subject]
-- Open with observation about their work
-- Share relevant perspective (not sales pitch)
-- Weave in relevance naturally
+- Observation about their work, why connecting makes sense
 - NO bullet lists
 - Sign: "Best regards, [Your Name], Business Development"
 
@@ -2170,25 +2177,28 @@ Return ONLY JSON."""
                                    headline: str, outreach_angle: str) -> Optional[Dict]:
         """Generate trigger-specific outreach messages"""
         
-        # Get lead info
+        # Get lead info and filtered company data
         lead_name = "there"
         lead_title = ""
         company_name = ""
+        company_fields = {}
+        do_not_mention_text = ""
         try:
             lead_record = self.leads_table.get(lead_id)
             lead_name = lead_record['fields'].get('Lead Name', 'there')
             lead_title = lead_record['fields'].get('Title', '')
             company_ids = lead_record['fields'].get('Company', [])
             if company_ids:
-                company_record = self.companies_table.get(company_ids[0])
-                company_name = company_record['fields'].get('Company Name', '')
+                raw_fields = self.companies_table.get(company_ids[0])['fields']
+                company_fields, suppressed = filter_by_confidence(raw_fields)
+                company_name = company_fields.get('Company Name', '')
+                do_not_mention_text = suppressed_to_do_not_mention(suppressed)
         except:
             pass
         
-        # Get company profile for context
-        our_company = "European biologics CDMO"
-        if self.company_profile:
-            our_company = self.company_profile.get('Capabilities', our_company)
+        # Build value proposition and philosophy
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate trigger-specific outreach messages referencing recent news.
 
@@ -2200,24 +2210,29 @@ LEAD:
 Name: {lead_name}
 Title: {lead_title}
 Company: {company_name}
+{do_not_mention_text}
 
-YOUR COMPANY: {our_company}
+{value_prop}
+
+{outreach_rules}
+
+Lead with the trigger event — this news is WHY you're reaching out NOW.
 
 Generate 3 SHORT messages that reference this specific news:
 
-1. EMAIL (80-100 words):
+1. EMAIL (60-80 words max):
 Subject: [Reference the news naturally]
 - Open by referencing the news
-- Connect to how you might help
+- Connect ONE Rezon strength to their situation
 - Soft CTA
-- Sign: "Best regards, [Your Name]"
+- Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
-2. LINKEDIN CONNECTION (150-180 chars):
+2. LINKEDIN CONNECTION (under 200 chars):
 - Reference the news briefly
 - Why you'd like to connect
 
-3. LINKEDIN SHORT MESSAGE (200-300 chars):
-- Congratulate or reference the news
+3. LINKEDIN SHORT MESSAGE (under 300 chars):
+- Reference the news naturally
 - Brief mention of relevance
 - Sign: "Best regards, [Your Name]"
 
