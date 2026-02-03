@@ -781,6 +781,15 @@ class FuzzyMatcher:
         if default_fields:
             fields.update(default_fields)
         
+        # Auto-classify persona from title if present
+        title = fields.get('Title', '')
+        if title and 'Persona Category' not in fields:
+            try:
+                from company_profile_utils import classify_persona
+                fields['Persona Category'] = classify_persona(title)
+            except ImportError:
+                pass
+        
         try:
             record = self.leads_table.create(fields)
             lead_id = record['id']
