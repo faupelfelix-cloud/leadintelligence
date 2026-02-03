@@ -14,6 +14,9 @@ from datetime import datetime
 from typing import Dict, Optional
 import anthropic
 from pyairtable import Api
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Configure logging
 logging.basicConfig(
@@ -46,21 +49,9 @@ class DeepLeadProfiler:
         )
         
         # Load company profile for outreach context
-        self.company_profile = self._load_company_profile()
+        self.company_profile = load_company_profile(self.base)
         
         logger.info("DeepLeadProfiler initialized successfully")
-    
-    def _load_company_profile(self) -> Dict:
-        """Load company profile from Airtable for outreach context"""
-        try:
-            table = self.base.table('Company Profile')
-            records = table.all()
-            if records:
-                logger.info("Company Profile loaded for outreach context")
-                return records[0]['fields']
-        except Exception as e:
-            logger.debug(f"Could not load Company Profile: {e}")
-        return {}
     
     def _generate_outreach_with_profile(self, lead_id: str, lead_name: str, lead_title: str,
                                         company_name: str, profile_data: Dict) -> Optional[Dict]:
@@ -81,6 +72,23 @@ class DeepLeadProfiler:
             our_company = self.company_profile.get('Capabilities', our_company)
             our_strengths = self.company_profile.get('Strengths', our_strengths)
             our_target = self.company_profile.get('Market Positioning', our_target)
+        
+        # Fetch and filter company data for value prop matching
+        company_fields = {}
+        do_not_mention_text = ""
+        try:
+            lead_record = self.leads_table.get(lead_id)
+            company_ids = lead_record['fields'].get('Company', [])
+            if company_ids:
+                raw_fields = self.companies_table.get(company_ids[0])['fields']
+                company_fields, suppressed = filter_by_confidence(raw_fields)
+                do_not_mention_text = suppressed_to_do_not_mention(suppressed)
+        except:
+            pass
+        
+        # Build value proposition matched to prospect
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        outreach_rules = build_outreach_philosophy()
         
         # Build personalization context from deep profile
         personalization = f"""
@@ -105,14 +113,13 @@ LEAD:
 Name: {lead_name}
 Title: {lead_title}
 Company: {company_name}
+{do_not_mention_text}
 
 {personalization}
 
-YOUR COMPANY:
-{our_company}
-- European CDMO with Sandoz-qualified facilities
-- Strengths: {our_strengths}
-- Target: {our_target}
+{value_prop}
+
+{outreach_rules}
 
 TONE & STYLE - ADAPT TO THEIR PROFILE:
 - Match their communication style preference
