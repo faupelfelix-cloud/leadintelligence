@@ -668,45 +668,63 @@ Search and assess now."""
 
 COMPANY: {company_name}
 
-Find and return ALL of the following:
+═══════════════════════════════════════════════════════════
+CRITICAL RULES — READ BEFORE RESEARCHING:
+═══════════════════════════════════════════════════════════
+1. ONLY report facts you can verify from web search results. If you cannot find a specific data point, return null — do NOT guess or infer.
+2. DISAMBIGUATION: If "{company_name}" matches multiple companies, pick the biotech/pharma one. If ambiguous, note in disambiguation_note.
+3. FUNDING: Only report funding from credible sources. If not found, return null. NEVER guess amounts.
+4. PIPELINE STAGE: Only report stages explicitly stated. If unclear, use "Unknown".
+5. THERAPEUTIC AREAS: Only include areas explicitly mentioned in company materials or credible news.
+6. CDMO PARTNERSHIPS: Only report if confirmed. "None found" is valid.
+7. For every key field, include confidence: "high" (multiple sources), "medium" (single source), "low" (inferred), "unverified" (not found).
+
+Find the following (return null for anything you CANNOT verify):
 1. Website URL
 2. LinkedIn company page URL
 3. Headquarters location (city, country)
-4. Company size - MUST be exactly one of: {', '.join(VALID_COMPANY_SIZE)}
-5. Focus areas - MUST be from: {', '.join(VALID_FOCUS_AREAS)}
-6. Technology platform - MUST be from: {', '.join(VALID_TECH_PLATFORMS)}
-7. Funding stage - MUST be exactly one of: {', '.join(VALID_FUNDING_STAGES)}
-8. Total funding raised (USD number only, e.g. 75000000)
-9. Latest funding round description (e.g. "Series B - $50M - Jan 2024")
-10. Pipeline stages - MUST be from: {', '.join(VALID_PIPELINE_STAGES)}
-11. Lead programs/products (text description)
-12. Therapeutic areas - MUST be from: {', '.join(VALID_THERAPEUTIC_AREAS)}
-13. Current CDMO partnerships (text - names of CDMOs if any)
-14. Manufacturing status - MUST be exactly one of: {', '.join(VALID_MANUFACTURING_STATUS)}
+4. Company size — MUST be one of: {', '.join(VALID_COMPANY_SIZE)}, or null
+5. Focus areas — MUST be from: {', '.join(VALID_FOCUS_AREAS)}, or empty list
+6. Technology platform — MUST be from: {', '.join(VALID_TECH_PLATFORMS)}, or empty list
+7. Funding stage — MUST be one of: {', '.join(VALID_FUNDING_STAGES)}
+8. Total funding raised (USD) — ONLY if found, otherwise null
+9. Latest funding round — ONLY if found, otherwise null
+10. Pipeline stages — MUST be from: {', '.join(VALID_PIPELINE_STAGES)}
+11. Lead programs/products
+12. Therapeutic areas — MUST be from: {', '.join(VALID_THERAPEUTIC_AREAS)}, or empty list
+13. Current CDMO partnerships — ONLY if confirmed, otherwise "None found"
+14. Manufacturing status — MUST be one of: {', '.join(VALID_MANUFACTURING_STATUS)}
 15. Recent news or developments
-16. ICP Score (0-90) with justification
-17. Urgency Score (0-100) - how urgent is outreach?
+16. ICP Score (0-90) with justification — score 0 for CDMO/CMO/service providers
+17. Urgency Score (0-100)
 
 Return ONLY valid JSON:
 {{
-    "website": "https://...",
-    "linkedin_company_page": "https://linkedin.com/company/...",
+    "website": "https://... or null",
+    "linkedin_company_page": "https://linkedin.com/company/... or null",
     "location": "City, Country",
     "company_size": "51-200",
-    "focus_areas": ["mAbs", "Bispecifics"],
+    "focus_areas": ["mAbs"],
     "technology_platforms": ["Mammalian CHO"],
     "funding_stage": "Series B",
     "total_funding_usd": 75000000,
-    "latest_funding_round": "Series B - $50M - Jan 2024",
+    "latest_funding_round": "Series B - $50M - Jan 2024 or null",
     "pipeline_stages": ["Phase 2"],
-    "lead_programs": "ABC-123 (anti-CD20 mAb) for autoimmune diseases",
-    "therapeutic_areas": ["Oncology", "Autoimmune"],
-    "cdmo_partnerships": "None publicly announced",
+    "lead_programs": "Program description or null",
+    "therapeutic_areas": ["Oncology"],
+    "cdmo_partnerships": "Partner name or None found",
     "manufacturing_status": "No Public Partner",
-    "recent_news": "Recently announced positive Phase 2 data...",
+    "recent_news": "Recent news or null",
     "icp_score": 65,
-    "icp_justification": "Mid-stage biotech with biologics focus, no public CDMO partner.",
-    "urgency_score": 75
+    "icp_justification": "Justification text",
+    "urgency_score": 75,
+    "disambiguation_note": "null or explanation if ambiguous",
+    "data_confidence": {{
+        "funding": "high|medium|low|unverified",
+        "pipeline": "high|medium|low|unverified",
+        "therapeutic_areas": "high|medium|low|unverified",
+        "cdmo_partnerships": "high|medium|low|unverified"
+    }}
 }}
 
 Return ONLY JSON."""
@@ -830,9 +848,27 @@ Return ONLY JSON."""
             if data.get('manufacturing_status'):
                 update_fields['Manufacturing Status'] = validate_single(data['manufacturing_status'], VALID_MANUFACTURING_STATUS, 'Unknown')
             
-            # Intelligence Notes
+            # Intelligence Notes with confidence
+            data_confidence = data.get('data_confidence', {})
+            disambiguation = data.get('disambiguation_note')
+            notes_parts = []
             if data.get('recent_news'):
-                update_fields['Intelligence Notes'] = f"Discovered via Conference Intelligence\n\n{data['recent_news'][:900]}"
+                notes_parts.append(f"Recent News: {data['recent_news'][:500]}")
+            if data_confidence:
+                low_conf = [f"⚠ {k}: {v}" for k, v in data_confidence.items() if v in ('low', 'unverified')]
+                if low_conf:
+                    notes_parts.append("Data Confidence Warnings:\n" + "\n".join(low_conf))
+            if disambiguation:
+                notes_parts.append(f"Disambiguation: {disambiguation}")
+            if notes_parts:
+                update_fields['Intelligence Notes'] = "Discovered via Conference Intelligence\n\n" + "\n\n".join(notes_parts)
+            
+            # Store raw confidence for downstream use
+            if data_confidence:
+                try:
+                    update_fields['Data Confidence'] = json.dumps(data_confidence)
+                except:
+                    pass
             
             # Scores and justifications
             if data.get('icp_score'):
@@ -983,32 +1019,48 @@ Return ONLY JSON."""
         prompt = f"""Research this professional for contact information:
 
 NAME: {lead_name}
-TITLE: {lead_title}
+TITLE (from our records): {lead_title}
 COMPANY: {company_name}
 {f"LINKEDIN: {linkedin_url}" if linkedin_url else ""}
 
+═══════════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════════
+1. TITLE: The title above is from our records. KEEP this title unless web search clearly shows a DIFFERENT current title at the SAME company. If changed, set title_changed to true.
+2. LINKEDIN: Only return a LinkedIn URL if you find the EXACT person (matching name AND company). Do NOT guess URLs.
+3. EMAIL: Search thoroughly but return null if not found — do NOT fabricate.
+4. Only return information about THIS specific person at THIS company.
+
 Find:
 1. Email address (search company website, press releases, LinkedIn, conference presentations)
-2. Verify current title
-3. LinkedIn URL (if not provided)
+2. Verify current title (see rule 1)
+3. LinkedIn URL (if not provided — see rule 2)
 4. Location (city, country)
 5. Any recent news, speaking engagements, or publications
 
-EMAIL FINDING PRIORITY - try these sources:
+EMAIL FINDING PRIORITY:
 - Company website team/leadership page
 - Press releases with contact info
 - Conference speaker lists
 - Published papers/patents
-- If not found, suggest email pattern based on company format (e.g., firstname.lastname@company.com)
+- If not found, suggest email pattern based on company format
 
 Return ONLY valid JSON:
 {{
     "email": "email@company.com or null",
     "email_confidence": "High|Medium|Low|Pattern Suggested",
-    "title": "Current verified title",
-    "linkedin_url": "https://linkedin.com/in/...",
-    "location": "City, Country",
-    "recent_activity": "Any recent news or speaking engagements"
+    "title": "{lead_title}",
+    "title_changed": false,
+    "title_change_reason": "null or reason",
+    "linkedin_url": "https://linkedin.com/in/... or null",
+    "location": "City, Country or null",
+    "recent_activity": "Any recent news or speaking engagements, or null",
+    "data_confidence": {{
+        "email": "high|medium|low|unverified",
+        "title": "high|medium|low|unverified",
+        "linkedin": "high|medium|low|unverified",
+        "identity_match": "high|medium|low"
+    }}
 }}
 
 Return ONLY JSON."""
@@ -1090,6 +1142,14 @@ Return ONLY JSON."""
             if data.get('recent_activity'):
                 existing_notes = f"Discovered via Conference Intelligence\n\n"
                 update_fields['Intelligence Notes'] = existing_notes + f"Recent Activity: {data['recent_activity'][:800]}"
+            
+            # Store data confidence for downstream use
+            lead_data_confidence = data.get('data_confidence', {})
+            if lead_data_confidence:
+                try:
+                    update_fields['Data Confidence'] = json.dumps(lead_data_confidence)
+                except:
+                    pass
             
             try:
                 self.leads_table.update(lead_id, update_fields)
