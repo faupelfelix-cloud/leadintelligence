@@ -1,0 +1,80 @@
+name: Persona Setup - Create Table & Backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'What to run'
+        required: true
+        type: choice
+        options:
+          - 'Dry run (preview backfill)'
+          - 'Create Persona Messaging table'
+          - 'Backfill Leads'
+          - 'Full setup (create table + backfill leads)'
+
+jobs:
+  persona-setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create config from secrets
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python setup.py
+
+      - name: Run persona setup
+        run: |
+          TASK="${{ github.event.inputs.task }}"
+
+          echo "======================================================"
+          echo "PERSONA SETUP"
+          echo "Task: $TASK"
+          echo "======================================================"
+
+          if [ "$TASK" = "Dry run (preview backfill)" ]; then
+            python setup_persona_messaging.py --backfill-leads --dry-run
+
+          elif [ "$TASK" = "Create Persona Messaging table" ]; then
+            python setup_persona_messaging.py --create-table
+
+          elif [ "$TASK" = "Backfill Leads" ]; then
+            python setup_persona_messaging.py --backfill-leads
+
+          elif [ "$TASK" = "Full setup (create table + backfill leads)" ]; then
+            python setup_persona_messaging.py --all
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Persona Setup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Task:** ${{ github.event.inputs.task }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pre-requisites" >> $GITHUB_STEP_SUMMARY
+          echo "Before running, ensure these Airtable fields exist:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. **Leads table** — Single Select field \`Persona Category\` with options:" >> $GITHUB_STEP_SUMMARY
+          echo "   C-Level / Owner, Operations / Manufacturing, Quality / Regulatory," >> $GITHUB_STEP_SUMMARY
+          echo "   Supply Chain / Procurement, Business Development / Commercial," >> $GITHUB_STEP_SUMMARY
+          echo "   R&D / Scientific, Program / Project Management, Finance / Investment, General" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "2. **Campaign Leads table** — Lookup field \`Persona Category\` from Linked Lead" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "3. **Persona Messaging table** — create manually with columns:" >> $GITHUB_STEP_SUMMARY
+          echo "   Persona, Value Drivers, Proof Points, Tone, What They Dont Want, Example Angles, Description" >> $GITHUB_STEP_SUMMARY
