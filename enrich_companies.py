@@ -159,6 +159,17 @@ class CompanyEnricher:
 
 Research the company: {company_name}
 
+═══════════════════════════════════════════════════════════
+CRITICAL RULES — READ BEFORE RESEARCHING:
+═══════════════════════════════════════════════════════════
+1. ONLY report facts you can verify from web search results. If you cannot find a specific data point, return null — do NOT guess or infer.
+2. DISAMBIGUATION: If "{company_name}" matches multiple companies, pick the one most likely to be a biotech/pharma. If ambiguous, note in disambiguation_note.
+3. FUNDING: Only report funding rounds from credible sources (press releases, Crunchbase, SEC filings, news). If you cannot find specific amounts, return null. NEVER guess funding amounts.
+4. PIPELINE STAGE: Only report stages explicitly stated in search results. Do NOT upgrade or change stages based on assumptions. If unclear, use "Unknown".
+5. THERAPEUTIC AREAS: Only include areas explicitly mentioned in company materials or credible news.
+6. CDMO PARTNERSHIPS: Only report partnerships confirmed in search results. "None found" is valid — do NOT guess.
+7. For every key field, include confidence: "high" (multiple sources/company website), "medium" (single credible source), "low" (inferred/uncertain), "unverified" (not found).
+
 Find and extract the following information:
 
 BASIC INFO:
@@ -168,27 +179,26 @@ BASIC INFO:
 - Company size (number of employees)
 
 BUSINESS INTELLIGENCE:
-- Focus areas - MUST be one or more from this EXACT list: {', '.join(self.VALID_FOCUS_AREAS)}
-- Technology platform - MUST be one or more from this EXACT list: {', '.join(self.VALID_TECH_PLATFORMS)}
-- Therapeutic areas - MUST be one or more from this EXACT list: {', '.join(self.VALID_THERAPEUTIC_AREAS)}
+- Focus areas — MUST be one or more from this EXACT list: {', '.join(self.VALID_FOCUS_AREAS)}
+- Technology platform — MUST be one or more from this EXACT list: {', '.join(self.VALID_TECH_PLATFORMS)}
+- Therapeutic areas — MUST be one or more from this EXACT list: {', '.join(self.VALID_THERAPEUTIC_AREAS)}
 
 FUNDING & PIPELINE:
-- Current funding stage - MUST be EXACTLY one of: {', '.join(self.VALID_FUNDING_STAGES)}
-- Total funding amount in USD (just the number, e.g., "75000000" for $75M)
-- Latest funding round details (e.g., "Series B - $75M - Oct 2024")
-- Pipeline stage - MUST be one or more from this EXACT list: {', '.join(self.VALID_PIPELINE_STAGES)}
+- Current funding stage — MUST be EXACTLY one of: {', '.join(self.VALID_FUNDING_STAGES)}
+- Total funding amount in USD (just the number, e.g., "75000000" for $75M) — ONLY if found in a source
+- Latest funding round details (e.g., "Series B - $75M - Oct 2024") — ONLY if found in a source
+- Pipeline stage — MUST be one or more from this EXACT list: {', '.join(self.VALID_PIPELINE_STAGES)}
 - Lead programs and their indications (free text description)
 
 CDMO RELEVANCE:
-- Any publicly announced CDMO partnerships (Lonza, Samsung Biologics, Fujifilm, etc.)
-- Manufacturing status - MUST be EXACTLY one of: {', '.join(self.VALID_MANUFACTURING_STATUS)}
+- Any publicly announced CDMO partnerships (Lonza, Samsung Biologics, Fujifilm, etc.) — ONLY if confirmed
+- Manufacturing status — MUST be EXACTLY one of: {', '.join(self.VALID_MANUFACTURING_STATUS)}
 - Recent news about manufacturing, CMC, or technical operations
 
 IMPORTANT INSTRUCTIONS:
-- For select fields, you MUST use EXACTLY the options provided above (copy them exactly, including capitalization)
-- If you cannot determine a value, use "Unknown" for single select fields or "Other" for multiple select fields
-- If a company does multiple things, you can select multiple options for Focus Area, Technology Platform, Therapeutic Areas, and Pipeline Stage
-- For dates, always include the year (e.g., "Oct 2024" not just "October")
+- For select fields, MUST use EXACTLY the options provided (copy exactly, including capitalization)
+- If you cannot determine a value, use "Unknown" for single select or null for free text
+- If a company does multiple things, select multiple options for Focus Area, Technology Platform, Therapeutic Areas, and Pipeline Stage
 
 Return your findings in this exact JSON format:
 {{
@@ -196,19 +206,26 @@ Return your findings in this exact JSON format:
   "linkedin_company_page": "URL or null",
   "location": "City, Country or null",
   "company_size_employees": 50,
-  "focus_areas": ["exact option from list", "another exact option"] or [],
+  "focus_areas": ["exact option from list"] or [],
   "technology_platforms": ["exact option from list"] or [],
   "therapeutic_areas": ["exact option from list"] or [],
   "funding_stage": "exact option from list",
   "total_funding_usd": 75000000,
-  "latest_funding_round": "Series B - $75M - Oct 2024",
+  "latest_funding_round": "Series B - $75M - Oct 2024 or null",
   "pipeline_stages": ["exact option from list"] or [],
   "lead_programs": "description or null",
-  "cdmo_partnerships": "details or null",
+  "cdmo_partnerships": "details or None found",
   "manufacturing_status": "exact option from list",
   "confidence": "High/Medium/Low",
   "sources": ["url1", "url2"],
-  "intelligence_notes": "Key findings and recent news"
+  "intelligence_notes": "Key findings and recent news",
+  "disambiguation_note": "null or explanation if company name was ambiguous",
+  "data_confidence": {{
+      "funding": "high|medium|low|unverified",
+      "pipeline": "high|medium|low|unverified",
+      "therapeutic_areas": "high|medium|low|unverified",
+      "cdmo_partnerships": "high|medium|low|unverified"
+  }}
 }}
 
 Only return valid JSON, no other text."""
@@ -720,7 +737,25 @@ Only return valid JSON, no other text."""
         
         # Intelligence Notes - free text
         if enriched_data.get('intelligence_notes'):
-            update_fields['Intelligence Notes'] = enriched_data['intelligence_notes']
+            notes_parts = [enriched_data['intelligence_notes']]
+            # Add confidence warnings
+            data_confidence = enriched_data.get('data_confidence', {})
+            if data_confidence:
+                low_conf = [f"⚠ {k}: {v}" for k, v in data_confidence.items() if v in ('low', 'unverified')]
+                if low_conf:
+                    notes_parts.append("Data Confidence Warnings:\n" + "\n".join(low_conf))
+            disambiguation = enriched_data.get('disambiguation_note')
+            if disambiguation:
+                notes_parts.append(f"Disambiguation: {disambiguation}")
+            update_fields['Intelligence Notes'] = "\n\n".join(notes_parts)
+        
+        # Store raw confidence for downstream use (outreach filtering)
+        data_confidence = enriched_data.get('data_confidence', {})
+        if data_confidence:
+            try:
+                update_fields['Data Confidence'] = json.dumps(data_confidence)
+            except:
+                pass
         
         # Update the record with error handling
         try:
@@ -858,6 +893,193 @@ Only return valid JSON, no other text."""
         logger.info(f"Successful: {success_count}")
         logger.info(f"Failed: {failed_count}")
         logger.info(f"{'='*60}")
+    
+    def get_companies_needing_re_enrichment(self, mode: str = "low_confidence", 
+                                             threshold: int = None) -> List[Dict]:
+        """Get companies that need re-enrichment based on confidence or score.
+        
+        Modes:
+        - low_confidence: Companies with missing/low Data Confidence field
+        - below_threshold: Companies with ICP score <= threshold
+        """
+        all_companies = self.companies_table.all(
+            formula="{Enrichment Status} = 'Enriched'"
+        )
+        
+        if mode == "low_confidence":
+            needs_re_enrichment = []
+            for record in all_companies:
+                fields = record['fields']
+                data_conf_raw = fields.get('Data Confidence', '')
+                
+                # No confidence data at all → needs re-enrichment
+                if not data_conf_raw:
+                    needs_re_enrichment.append(record)
+                    continue
+                
+                # Parse and check for low/unverified fields
+                try:
+                    data_conf = json.loads(data_conf_raw)
+                    has_low = any(
+                        v in ('low', 'unverified') 
+                        for v in data_conf.values()
+                    )
+                    if has_low:
+                        needs_re_enrichment.append(record)
+                except (json.JSONDecodeError, AttributeError):
+                    needs_re_enrichment.append(record)
+            
+            logger.info(f"Found {len(needs_re_enrichment)} companies needing re-enrichment (low confidence)")
+            return needs_re_enrichment
+        
+        elif mode == "below_threshold" and threshold is not None:
+            needs_re_enrichment = [
+                r for r in all_companies 
+                if (r['fields'].get('ICP Fit Score', 0) or 0) <= threshold
+                and (r['fields'].get('ICP Fit Score', 0) or 0) > 0  # Skip ICP=0 (excluded)
+            ]
+            logger.info(f"Found {len(needs_re_enrichment)} companies with ICP ≤ {threshold}")
+            return needs_re_enrichment
+        
+        return []
+    
+    def re_enrich_low_confidence(self, limit: int = None, offset: int = 0):
+        """Re-enrich companies that have low/missing data confidence.
+        
+        This screens the existing 2000+ companies and only re-enriches those where
+        the Data Confidence field is missing or contains low/unverified values.
+        
+        Usage:
+            python enrich_companies.py --re-enrich-low-confidence --limit 100
+        """
+        logger.info("="*60)
+        logger.info("RE-ENRICHMENT MODE: Low Confidence Companies")
+        logger.info("="*60)
+        
+        companies = self.get_companies_needing_re_enrichment(mode="low_confidence")
+        
+        if offset > 0:
+            companies = companies[offset:]
+        if limit:
+            companies = companies[:limit]
+        
+        total = len(companies)
+        logger.info(f"Re-enriching {total} companies")
+        
+        if total == 0:
+            logger.info("All companies have good confidence data — nothing to re-enrich")
+            return
+        
+        success_count = 0
+        failed_count = 0
+        
+        for idx, company in enumerate(companies, 1):
+            company_name = company['fields'].get('Company Name', 'Unknown')
+            record_id = company['id']
+            old_icp = company['fields'].get('ICP Fit Score', 'N/A')
+            old_conf = company['fields'].get('Data Confidence', 'MISSING')
+            
+            logger.info(f"[{idx}/{total}] Re-enriching: {company_name} (ICP: {old_icp}, Confidence: {old_conf})")
+            
+            try:
+                enriched_data = self.search_company_info(company_name)
+                
+                if enriched_data.get('confidence') == 'Failed' or enriched_data.get('error'):
+                    logger.warning(f"  ⚠ Re-enrichment failed: {enriched_data.get('error', 'Unknown')}")
+                    failed_count += 1
+                    continue
+                
+                self.update_company_record(record_id, enriched_data)
+                new_icp = enriched_data.get('icp_score', 'N/A')
+                logger.info(f"  ✓ Re-enriched (ICP: {old_icp} → {new_icp})")
+                success_count += 1
+                
+                time.sleep(self.config['web_search']['rate_limit_delay'])
+                
+            except Exception as e:
+                logger.error(f"  ✗ Error: {e}")
+                failed_count += 1
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Re-enrichment complete!")
+        logger.info(f"Total processed: {total}")
+        logger.info(f"Successful: {success_count}")
+        logger.info(f"Failed: {failed_count}")
+        logger.info(f"{'='*60}")
+    
+    def re_enrich_below_threshold(self, threshold: int = 50, limit: int = None, offset: int = 0):
+        """Re-enrich companies below a given ICP threshold.
+        
+        Useful for reviewing companies that scored low — they may have been
+        enriched with bad data that depressed their score.
+        
+        Usage:
+            python enrich_companies.py --re-enrich-threshold 50 --limit 100
+        """
+        logger.info("="*60)
+        logger.info(f"RE-ENRICHMENT MODE: Companies with ICP ≤ {threshold}")
+        logger.info("="*60)
+        
+        companies = self.get_companies_needing_re_enrichment(
+            mode="below_threshold", threshold=threshold
+        )
+        
+        if offset > 0:
+            companies = companies[offset:]
+        if limit:
+            companies = companies[:limit]
+        
+        total = len(companies)
+        logger.info(f"Re-enriching {total} companies")
+        
+        if total == 0:
+            logger.info(f"No companies found with ICP ≤ {threshold}")
+            return
+        
+        success_count = 0
+        failed_count = 0
+        upgraded = 0
+        
+        for idx, company in enumerate(companies, 1):
+            company_name = company['fields'].get('Company Name', 'Unknown')
+            record_id = company['id']
+            old_icp = company['fields'].get('ICP Fit Score', 0) or 0
+            
+            logger.info(f"[{idx}/{total}] Re-enriching: {company_name} (ICP: {old_icp})")
+            
+            try:
+                enriched_data = self.search_company_info(company_name)
+                
+                if enriched_data.get('confidence') == 'Failed' or enriched_data.get('error'):
+                    logger.warning(f"  ⚠ Re-enrichment failed")
+                    failed_count += 1
+                    continue
+                
+                self.update_company_record(record_id, enriched_data)
+                new_icp = self.calculate_icp_score(enriched_data)
+                
+                if new_icp > old_icp:
+                    logger.info(f"  ✓ UPGRADED ICP: {old_icp} → {new_icp}")
+                    upgraded += 1
+                elif new_icp < old_icp:
+                    logger.info(f"  ○ Downgraded ICP: {old_icp} → {new_icp}")
+                else:
+                    logger.info(f"  - ICP unchanged: {old_icp}")
+                
+                success_count += 1
+                time.sleep(self.config['web_search']['rate_limit_delay'])
+                
+            except Exception as e:
+                logger.error(f"  ✗ Error: {e}")
+                failed_count += 1
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Re-enrichment complete!")
+        logger.info(f"Total processed: {total}")
+        logger.info(f"Successful: {success_count}")
+        logger.info(f"  Upgraded: {upgraded}")
+        logger.info(f"Failed: {failed_count}")
+        logger.info(f"{'='*60}")
 
 
 
@@ -874,12 +1096,26 @@ def main():
                        help='Skip first N companies (for batch processing)')
     parser.add_argument('--config', default='config.yaml',
                        help='Path to config file')
+    parser.add_argument('--re-enrich-low-confidence', action='store_true',
+                       help='Re-enrich companies with low/missing data confidence')
+    parser.add_argument('--re-enrich-threshold', type=int, default=None,
+                       help='Re-enrich companies with ICP score <= threshold (e.g. 50)')
     
     args = parser.parse_args()
     
     try:
         enricher = CompanyEnricher(config_path=args.config)
-        enricher.enrich_companies(status=args.status, limit=args.limit, offset=args.offset)
+        
+        if args.re_enrich_low_confidence:
+            enricher.re_enrich_low_confidence(limit=args.limit, offset=args.offset)
+        elif args.re_enrich_threshold is not None:
+            enricher.re_enrich_below_threshold(
+                threshold=args.re_enrich_threshold, 
+                limit=args.limit, 
+                offset=args.offset
+            )
+        else:
+            enricher.enrich_companies(status=args.status, limit=args.limit, offset=args.offset)
     except FileNotFoundError:
         logger.error(f"Config file not found: {args.config}")
         sys.exit(1)
