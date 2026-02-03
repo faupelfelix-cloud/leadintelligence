@@ -164,7 +164,8 @@ def build_value_proposition(profile: Dict, company_fields: Dict = None,
         return """
 YOUR COMPANY (Rezon Bio):
 European biologics CDMO specializing in mammalian CHO cell culture for mAbs, bispecifics, and ADCs.
-Target: Mid-size biotechs needing cost-efficient manufacturing support.
+Best cost-for-value in the EU: lower half of cost benchmarks, multinational pharma validated, 
+FDA approved, 95% batch success rate. Quality is uncompromised.
 """
     
     company_fields = company_fields or {}
@@ -243,9 +244,8 @@ def build_outreach_philosophy() -> str:
     Based on research into what makes CDMO outreach convert:
     - Lead with THEIR situation, not your capabilities
     - Answer "why should I take this meeting?" from their perspective
-    - Use timeline hooks (tied to their stage/milestone)
-    - One concrete proof point, not a features list
-    - Low-barrier CTA
+    - Give a SPECIFIC, DIFFERENTIATED reason — not a vague offer
+    - Sound like a real person, not a polished AI
     """
     return """
 ═══════════════════════════════════════════════════════════
@@ -253,41 +253,110 @@ OUTREACH PHILOSOPHY — CRITICAL:
 ═══════════════════════════════════════════════════════════
 
 Your #1 job: answer "Why should I take this meeting?" from THEIR perspective.
+This means two things: (a) sound like a real human, AND (b) give a SPECIFIC 
+reason why Rezon Bio is interesting to THEM specifically, not just "we're an EU CDMO".
 
-1. LEAD WITH THEIR WORLD — don't start with "We are a CDMO..."
-   Start with an observation about their work, stage, or challenge.
+1. OPEN CASUALLY — don't narrate their company back to them
    
-2. CONNECT ONE REZON STRENGTH TO THEIR SITUATION
-   BAD: "We offer cost-efficient manufacturing" (generic)
-   GOOD: "Scaling a bispecific for Phase 3 in the EU? That's exactly the stage where our setup makes the biggest cost difference" (specific + relevant)
+   BAD: "With Merck's expanding oncology portfolio requiring global supply resilience..."
+   (Sounds like you copied from their annual report. Presumptuous and stiff.)
+   
+   GOOD: "Saw your team's been busy with Phase 3 readouts — exciting times."
+   (Simple. Human. Shows you pay attention without showing off.)
+   
+   BAD: "I noticed your company has raised a Series B to advance your bispecific pipeline..."
+   (Stacking facts to prove you did homework. Feels robotic.)
+   
+   GOOD: "Congrats on the pipeline progress — sounds like things are moving fast."
+   (Light touch. One reference. Move on to the point.)
 
-3. ONE PROOF POINT, NOT A FEATURES LIST
+2. MAKE THE VALUE PROPOSITION SHARP AND SPECIFIC — this is the core of the message
+   The opener should be humble and casual, but the VALUE PROP should be concrete
+   and differentiated. Don't water it down to "we're EU-based, might be worth a look."
+   
+   BAD: "We're an EU-based option that might be worth a look" (so what? There are dozens)
+   BAD: "We offer cost-efficient manufacturing" (generic, every CDMO says this)
+   
+   GOOD: "We sit in the lower half of EU cost benchmarks but our facilities were 
+   qualified by Sandoz and we hold FDA approvals — so it's pharma-grade quality 
+   without the premium CDMO price tag."
+   (This answers: why YOU specifically? What makes you DIFFERENT from other EU CDMOs?)
+   
+   GOOD: "Most EU CDMOs either charge a premium or cut corners. We managed to get 
+   to competitive pricing while keeping a 95% batch success rate and multinational 
+   pharma validation — that's the bit that's hard to find."
+   (Positions against the category, explains WHY the cost is interesting.)
+   
+   The key: casual opener + sharp value prop. Humble about how you open,
+   confident about what you actually bring to the table.
+
+3. ONE PROOF POINT, WOVEN IN NATURALLY
    BAD: "We have FDA/EMA approval, Sandoz qualification, state-of-art facilities, 2000L bioreactors..."
-   GOOD: "Our facilities were qualified by Sandoz, so the regulatory bar is already set" (one credible signal)
+   GOOD: "Sandoz qualified our facilities early on, so the regulatory groundwork is done"
+   (Casual delivery of a strong credential. Don't stack multiple proof points.)
 
-4. TIMELINE HOOK > PROBLEM HOOK
+4. TIMELINE HOOK > GENERIC PROBLEM HOOK
    BAD: "Are you facing manufacturing challenges?"
-   GOOD: "With your Phase 3 readout approaching, locking in manufacturing timelines becomes critical"
+   GOOD: "With Phase 3 coming up, manufacturing timelines start to get very real"
 
-5. LOW-BARRIER CTA — suggest a conversation, not a capabilities presentation
+5. LOW-BARRIER CTA — suggest a conversation, not a pitch
    BAD: "Can we schedule a 60-minute capabilities review?"
-   GOOD: "Would it make sense to compare notes over a quick call?"
-
-6. SOUND LIKE A KNOWLEDGEABLE PEER, NOT A SALESPERSON
-   Write as if you're an industry colleague who spotted something relevant.
+   BAD: "Would it make sense to compare notes on EU supply chain strategies?" (consultant-speak)
+   GOOD: "Happy to chat if useful — no agenda, just a conversation."
+   GOOD: "Would a quick call make sense? Even 15 minutes to see if there's a fit."
 
 ═══════════════════════════════════════════════════════════
 STYLE RULES:
 ═══════════════════════════════════════════════════════════
-- Natural, human language — slightly imperfect is fine
+- The OPENER should be casual and human — slightly humble, not over-polished
+- The VALUE PROP should be specific and confident — this is where you earn the meeting
+- Combination: "Hey, noticed [light reference]. [Sharp, specific reason Rezon is different]. [Easy CTA]."
+- Write like a real person typing an email, not a marketing team crafting copy
 - NO bullet lists — weave points into sentences
 - NO **bold** markup — clean formatting only
-- Show you know them, don't tell them their situation
-- Pick ONE relevant detail max from their company data
-- Keep messages SHORT — less is more
+- DON'T over-demonstrate your research — one light reference is enough
+  BAD: "With your company's recent Series C and three programs advancing into late-stage..."
+  GOOD: "Saw your Phase 3 news — congrats."
 - NEVER mention specific funding amounts or rounds
 - NEVER claim specific pipeline stages unless provided as verified
 - NEVER mention CDMO partnerships or manufacturing decisions
+- NEVER claim we compete with APAC on cost — we don't. Our positioning is best cost-for-value IN THE EU.
+- NEVER use "cost-competitive with APAC/Asia" or similar — this is factually wrong
+
+═══════════════════════════════════════════════════════════
+BANNED PHRASES — classic AI signatures, never use these:
+═══════════════════════════════════════════════════════════
+These phrases instantly signal the message was AI-generated. NEVER use them:
+- "I hope this message finds you well"
+- "I wanted to reach out because..."
+- "I'd love to explore..."
+- "I'd love to connect..."  
+- "I came across your..." / "I came across [company]..."
+- "I was impressed by..."
+- "Let's explore synergies"
+- "Explore potential synergies"
+- "I believe there's a great opportunity..."
+- "Leverage" (as a verb in outreach)
+- "Streamline your..."
+- "Take your [X] to the next level"
+- "In today's rapidly evolving..."
+- "Navigating the complexities of..."
+- "At the forefront of..."
+- "Cutting-edge" / "Best-in-class" / "World-class"
+- "Unlock" / "Unleash" / "Empower"
+- "Seamless" / "Seamlessly"
+- "Circle back" / "Touch base"
+- "Deep dive" (in outreach context)
+- "I imagine" (as opener — presumptuous)
+- "Increasingly complex" / "Expanding portfolio"
+- "Supply resilience" / "Dual sourcing strategy"
+- "Compare notes on [buzzword] strategies"
+- "Discuss alignment" / "Explore alignment"
+
+Instead, write like you'd actually talk to someone at a conference bar.
+
+Words/phrases that WORK: "noticed", "seems like", "might be worth", "happy to chat",
+"if it's useful", "curious whether", "no pressure", "even 15 minutes"
 """
 
 
@@ -304,21 +373,27 @@ def _match_segment_pitch(profile: Dict, company_fields: Dict) -> str:
     
     funding = (company_fields.get('Funding Stage', '') or '').lower()
     
-    # Value Proposition by Segment from Company Profile
+    # Check if Company Profile has custom segment messaging
+    segment_messaging = profile.get('Value Proposition by Segment', '') if profile else ''
+    
+    # Value Proposition by Segment
     segments = []
     
     if any(x in pipeline_str for x in ['phase 3', 'phase iii', 'commercial', 'marketed', 'approved']):
-        segments.append("LATE-STAGE / COMMERCIAL: Fast tech transfer, competitive commercial pricing, reliable batch execution. They need a manufacturing partner who can deliver on timeline and cost for commercialization.")
+        segments.append("LATE-STAGE / COMMERCIAL: Fast tech transfer, competitive commercial pricing, reliable batch execution. They need a manufacturing partner who delivers on timeline and cost — validated by multinational pharma, not just another mid-tier CDMO.")
     
     if any(x in pipeline_str for x in ['phase 2', 'phase ii', 'phase 1', 'phase i', 'clinical']):
-        segments.append("CLINICAL STAGE: Cost-efficient clinical supply services + scaling expertise. They need a partner who can grow with them from clinical through commercial without switching CDMOs.")
+        segments.append("CLINICAL STAGE: Cost-efficient clinical supply + scaling expertise. They need a partner who can grow with them from clinical through commercial without switching CDMOs. Our cost structure means their runway stretches further.")
     
     if any(x in funding for x in ['series b', 'series c', 'ipo', 'public']):
-        segments.append("FUNDED & SCALING: They have capital to invest in manufacturing. Cost optimization matters because they're deploying capital efficiently. EU manufacturing can be significantly cheaper than US alternatives.")
+        segments.append("FUNDED & SCALING: They have capital to deploy efficiently. Our position in the lower half of EU cost benchmarks means they get pharma-grade quality without overpaying for a premium CDMO brand name.")
     
     if not segments:
-        # Default based on general profile
-        segments.append("GENERAL: Cost-competitive European manufacturing for mid-size biotechs. Lower cost than Western CDMOs, higher trust than APAC. Agile mid-size partner, not a bureaucratic big CDMO.")
+        # Default — pull from Company Profile if available
+        if segment_messaging:
+            segments.append(f"GENERAL:\n{segment_messaging[:400]}")
+        else:
+            segments.append("GENERAL: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Agile mid-size partner, not a bureaucratic big CDMO.")
     
     return '\n'.join(segments)
 
@@ -414,10 +489,10 @@ def _match_pain_points(profile: Dict, company_fields: Dict) -> str:
     pain_points = []
     
     if any(x in location for x in ['us', 'united states', 'america']):
-        pain_points.append("US biotechs face high manufacturing costs domestically — EU manufacturing can cut costs significantly without sacrificing quality")
+        pain_points.append("US biotechs often overpay for manufacturing — EU-based CDMOs like Rezon can offer the same quality at a significantly lower cost point")
     
     if any(x in location for x in ['europ', 'germany', 'france', 'uk', 'swiss']):
-        pain_points.append("EU biotechs need regulatory-aligned manufacturing close to home — avoids geopolitical supply chain risks from APAC outsourcing")
+        pain_points.append("EU biotechs benefit from an EU-based CDMO: regulatory alignment, proximity, and no cross-border complexity for EMA filings")
     
     if 'no public partner' in mfg_status or 'no partner' in mfg_status:
         pain_points.append("They likely don't have a manufacturing partner yet — first-mover opportunity to become their CDMO of choice")
@@ -425,7 +500,7 @@ def _match_pain_points(profile: Dict, company_fields: Dict) -> str:
         pain_points.append("They have a partner but may be looking for alternatives or second source — approach as complementary option")
     
     if not pain_points:
-        pain_points.append("Mid-size biotechs often get deprioritized by large CDMOs — Rezon offers the attention and agility of a mid-size partner")
+        pain_points.append("Mid-size biotechs often get deprioritized by large CDMOs — Rezon offers the attention and agility of a mid-size partner with pharma-validated quality")
     
     return "THEIR LIKELY PAIN POINTS (reference indirectly, don't state them bluntly):\n" + '\n'.join(f"- {pp}" for pp in pain_points[:2])
 
@@ -435,13 +510,25 @@ def _match_differentiation(diff_text: str, company_fields: Dict) -> str:
     
     location = (company_fields.get('Location/HQ', '') or '').lower()
     
-    if any(x in location for x in ['china', 'india', 'korea', 'japan', 'asia', 'singapore']):
-        return "VS. APAC: Higher trust (EU location), proximity to US/EU markets, no geopolitical supply chain risk, easier communication"
+    # If Company Profile has differentiation text, use it directly
+    if diff_text:
+        # Try to pick relevant section based on prospect geography
+        if any(x in location for x in ['us', 'united states', 'america']):
+            for line in diff_text.split('\n'):
+                if any(x in line.lower() for x in ['us cdmo', 'american', 'us-based']):
+                    return f"COMPETITIVE ANGLE:\n{line.strip()}"
+        if any(x in location for x in ['switzerland', 'germany', 'france', 'uk']):
+            for line in diff_text.split('\n'):
+                if any(x in line.lower() for x in ['lonza', 'samsung', 'fuji', 'western eu', 'premium']):
+                    return f"COMPETITIVE ANGLE:\n{line.strip()}"
+        # Return first meaningful section if no geo match
+        return f"COMPETITIVE ANGLE:\n{diff_text[:400]}"
     
+    # Fallback differentiation based on geography
     if any(x in location for x in ['us', 'united states', 'america']):
-        return "VS. US CDMOs: Significantly lower cost for equivalent quality, EU regulatory footprint for global filing, agile mid-size partner"
+        return "VS. US CDMOs: Lower half of EU cost benchmarks — significantly cheaper than US manufacturing for equivalent pharma-validated quality. FDA approved, so dual filing is straightforward."
     
     if any(x in location for x in ['switzerland', 'germany', 'france', 'uk', 'netherlands', 'belgium']):
-        return "VS. Western EU CDMOs (Lonza, Samsung, Fujifilm): Lower cost without compromising quality, faster decision-making, more personalized service"
+        return "VS. Premium EU CDMOs (Lonza, Samsung, Fujifilm): Same pharma-grade quality, but lower half of cost benchmarks. Faster decision-making, more personalized service, no 'small fish in a big pond' problem."
     
-    return "KEY: European quality and trust at competitive pricing — lower cost than Western CDMOs, higher trust than APAC"
+    return "KEY DIFFERENTIATOR: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Quality is uncompromised; it's the overhead and pricing model that's different."
