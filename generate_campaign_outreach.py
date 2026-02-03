@@ -25,9 +25,9 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import (load_company_profile, build_value_proposition, 
+from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention)
+                                   suppressed_to_do_not_mention, classify_persona)
 
 # Configure logging FIRST
 logging.basicConfig(
@@ -87,6 +87,7 @@ class CampaignLeadsProcessor:
         
         # Load company profile for outreach personalization
         self.company_profile = load_company_profile(self.base)
+        self.persona_messaging = load_persona_messaging(self.base)
         
         logger.info("✓ CampaignLeadsProcessor initialized (inline enrichment mode)")
     
@@ -687,6 +688,10 @@ Return ONLY JSON."""
             if company_record_id:
                 fields['Company'] = [company_record_id]
             
+            # Classify persona from title
+            if title:
+                fields['Persona Category'] = classify_persona(title)
+            
             record = self.leads_table.create(fields)
             return record.get('id')
         except Exception as e:
@@ -830,6 +835,11 @@ Return ONLY JSON."""
                 update_fields['Email'] = data['email']
             if data.get('title'):
                 update_fields['Title'] = data['title']
+                # Update persona category based on enriched title
+                update_fields['Persona Category'] = classify_persona(data['title'])
+            elif title:
+                # Use original title if enrichment didn't find a new one
+                update_fields['Persona Category'] = classify_persona(title)
             if data.get('linkedin_url'):
                 update_fields['LinkedIn URL'] = data['linkedin_url']
             if data.get('recent_activity'):
@@ -969,7 +979,7 @@ Return ONLY JSON."""
             pass
         
         # Build value proposition matched to this prospect
-        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate personalized outreach messages for this lead.
@@ -1311,7 +1321,7 @@ COMPANY BACKGROUND (verified):
 {company_context_text}
 {do_not_mention_text}
 {campaign_section}
-{build_value_proposition(self.company_profile, company_fields, title, campaign_type)}
+{build_value_proposition(self.company_profile, company_fields, title, campaign_type, persona_messaging=self.persona_messaging)}
 {build_outreach_philosophy()}
 
 ═══════════════════════════════════════════════════════════
