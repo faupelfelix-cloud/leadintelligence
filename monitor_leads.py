@@ -14,6 +14,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import anthropic
 from pyairtable import Api
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Configure logging
 logging.basicConfig(
@@ -56,21 +59,9 @@ class LeadSurveillance:
         )
         
         # Load company profile for outreach context
-        self.company_profile = self._load_company_profile()
+        self.company_profile = load_company_profile(self.base)
         
         logger.info("LeadSurveillance initialized successfully")
-    
-    def _load_company_profile(self) -> Dict:
-        """Load company profile from Airtable for outreach context"""
-        try:
-            table = self.base.table('Company Profile')
-            records = table.all()
-            if records:
-                logger.info("Company Profile loaded for outreach context")
-                return records[0]['fields']
-        except Exception as e:
-            logger.warning(f"Could not load Company Profile: {e}")
-        return {}
     
     def get_our_conferences(self) -> str:
         """Get list of conferences we're attending for matching"""
@@ -714,28 +705,33 @@ Only return valid JSON, no other text."""
         description = trigger_event.get('description', '')
         outreach_angle = trigger_event.get('outreach_angle', '')
         
-        # Get lead info
+        # Get lead info and filtered company data
         lead_title = ""
+        company_fields = {}
+        do_not_mention_text = ""
         try:
             lead_record = self.leads_table.get(lead_record_id)
             lead_title = lead_record['fields'].get('Title', '')
             if not company_name:
                 company_ids = lead_record['fields'].get('Company', [])
                 if company_ids:
-                    company_record = self.companies_table.get(company_ids[0])
-                    company_name = company_record['fields'].get('Company Name', '')
+                    raw_fields = self.companies_table.get(company_ids[0])['fields']
+                    company_fields, suppressed = filter_by_confidence(raw_fields)
+                    company_name = company_fields.get('Company Name', '')
+                    do_not_mention_text = suppressed_to_do_not_mention(suppressed)
+            else:
+                # Company name was passed in — still try to get fields for value prop
+                company_ids = lead_record['fields'].get('Company', [])
+                if company_ids:
+                    raw_fields = self.companies_table.get(company_ids[0])['fields']
+                    company_fields, suppressed = filter_by_confidence(raw_fields)
+                    do_not_mention_text = suppressed_to_do_not_mention(suppressed)
         except:
             pass
         
-        # Get company profile for consistent messaging
-        our_company = "European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs)"
-        our_strengths = "Mammalian cell culture, mAbs, bispecifics, ADCs"
-        our_target = "Mid-size biotech companies"
-        
-        if self.company_profile:
-            our_company = self.company_profile.get('Capabilities', our_company)
-            our_strengths = self.company_profile.get('Strengths', our_strengths)
-            our_target = self.company_profile.get('Market Positioning', our_target)
+        # Build value proposition and philosophy
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate trigger-specific outreach messages based on this intelligence.
 
@@ -748,39 +744,28 @@ LEAD:
 Name: {lead_name}
 Title: {lead_title}
 Company: {company_name}
+{do_not_mention_text}
 
-YOUR COMPANY:
-{our_company}
-- European CDMO with Sandoz-qualified facilities
-- Strengths: {our_strengths}
-- Target: {our_target}
-- Focus: Mid-size biotechs in Phase 2/3 or commercial
-- Value prop: Cost-efficient European quality, agile partner
+{value_prop}
 
-TONE & STYLE GUIDELINES:
-- Conversational and warm, NOT salesy
-- Reference the trigger naturally (not "I saw that..." or "Congratulations on...")
-- Focus on THEIR perspective, not your pitch
-- Soft CTAs (coffee chat, brief call, "would love to hear more")
-- NO bullet points in emails
-- Professional but personable
-- Sign emails: "Best regards, [Your Name], Business Development"
+{outreach_rules}
+
+Lead with the trigger — this event is WHY you're reaching out NOW.
 
 Generate 3 messages:
 
-1. EMAIL (120-150 words):
-Subject: [Natural subject referencing the trigger - NOT "Congratulations on..."]
-- Conversational opener referencing the trigger/news naturally
-- Why you might be relevant to THEM (weave it in, no bullet lists)
+1. EMAIL (60-80 words max):
+Subject: [Natural subject referencing the trigger]
+- Reference the trigger naturally (NOT "Congratulations on...")
+- Connect ONE Rezon strength to their situation
 - Soft CTA
-- Sign: "Best regards, [Your Name], Business Development"
+- Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
-2. LINKEDIN CONNECTION REQUEST (180-200 chars):
+2. LINKEDIN CONNECTION REQUEST (under 200 chars):
 - Brief, friendly, reference the trigger or their role
 - Why you'd like to connect
 
-3. LINKEDIN SHORT MESSAGE (300-400 chars):
-- For after connection accepted
+3. LINKEDIN SHORT MESSAGE (under 300 chars):
 - Reference the trigger conversationally
 - Brief mention of relevance
 - End: "Best regards, [Your Name]"
