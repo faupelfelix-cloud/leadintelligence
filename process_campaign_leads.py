@@ -25,7 +25,9 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import load_company_profile, build_value_proposition, build_outreach_philosophy
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Configure logging FIRST
 logging.basicConfig(
@@ -945,7 +947,9 @@ Return ONLY JSON."""
             company_ids = lead_record['fields'].get('Company', [])
             if company_ids:
                 company_record = self.companies_table.get(company_ids[0])
-                company_fields = company_record['fields']
+                raw_fields = company_record['fields']
+                # Apply confidence filtering
+                company_fields, suppressed = filter_by_confidence(raw_fields)
                 parts = []
                 tech = company_fields.get('Technology Platform', [])
                 if tech:
@@ -953,6 +957,12 @@ Return ONLY JSON."""
                 ta = company_fields.get('Therapeutic Areas', [])
                 if ta:
                     parts.append(f"Focus: {', '.join(ta) if isinstance(ta, list) else ta}")
+                if parts:
+                    company_context = '\n'.join(parts)
+                # Add DO NOT MENTION for suppressed fields
+                dnm = suppressed_to_do_not_mention(suppressed)
+                if dnm:
+                    company_context += '\n' + dnm
                 if parts:
                     company_context = '\n'.join(parts)
         except:
@@ -1231,58 +1241,35 @@ Return ONLY JSON."""
         campaign_date = campaign_context.get('Campaign Date', '')
         
         # === COMPANY CONTEXT — CONFIDENCE-FILTERED ===
-        # Parse data confidence if available
-        data_confidence = {}
-        raw_confidence = company_fields.get('Data Confidence', '')
-        if raw_confidence:
-            try:
-                data_confidence = json.loads(raw_confidence)
-            except:
-                pass
-        
-        def is_safe(field_name: str) -> bool:
-            """Only pass data with high or medium confidence to the prompt"""
-            conf = data_confidence.get(field_name, 'high')  # Default high for older records
-            return conf in ('high', 'medium')
+        # Use shared confidence filter to strip low-confidence fields
+        safe_company, suppressed = filter_by_confidence(company_fields)
         
         # Build SAFE company context — only verified data
         company_context = []
         
         # Technology platform is usually safe (from company website)
-        tech_platform = company_fields.get('Technology Platform', [])
+        tech_platform = safe_company.get('Technology Platform', [])
         if tech_platform:
             if isinstance(tech_platform, list):
                 tech_platform = ', '.join(tech_platform)
             company_context.append(f"Technology: {tech_platform}")
         
         # Therapeutic areas — only if confident
-        therapeutic = company_fields.get('Therapeutic Areas', [])
-        if therapeutic and is_safe('therapeutic_areas'):
+        therapeutic = safe_company.get('Therapeutic Areas', [])
+        if therapeutic:
             if isinstance(therapeutic, list):
                 therapeutic = ', '.join(therapeutic)
             company_context.append(f"Focus: {therapeutic}")
         
         # Pipeline — only if confident, and truncated
-        pipeline = company_fields.get('Lead Programs', '')
-        if pipeline and is_safe('pipeline'):
+        pipeline = safe_company.get('Lead Programs', '')
+        if pipeline:
             company_context.append(f"Pipeline: {pipeline[:150]}")
         
         company_context_text = '\n'.join(company_context) if company_context else 'Biotech company'
         
         # === EXPLICIT "DO NOT MENTION" LIST ===
-        do_not_mention = []
-        if not is_safe('funding'):
-            do_not_mention.append("specific funding rounds or amounts")
-        if not is_safe('pipeline'):
-            do_not_mention.append("specific pipeline stages (Phase 1/2/3)")
-        if not is_safe('therapeutic_areas'):
-            do_not_mention.append("specific therapeutic areas")
-        if not is_safe('cdmo_partnerships'):
-            do_not_mention.append("CDMO partnerships or manufacturing partners")
-        
-        do_not_mention_text = ""
-        if do_not_mention:
-            do_not_mention_text = "\n⚠️ DO NOT MENTION (unverified): " + ", ".join(do_not_mention)
+        do_not_mention_text = suppressed_to_do_not_mention(suppressed)
         
         # === CAMPAIGN-SPECIFIC SECTION ===
         campaign_section = ""
@@ -1722,6 +1709,149 @@ Return ONLY valid JSON:
         logger.info("WORKFLOW COMPLETE")
         logger.info("="*50)
     
+    # ==================== REFRESH OUTREACH (regenerate existing) ====================
+    
+    def get_campaign_leads_for_refresh(self, campaign_name: str = None) -> List[Dict]:
+        """Get campaign leads that already have outreach (for regeneration).
+        
+        Args:
+            campaign_name: Optional — filter to a specific campaign only
+            
+        Returns:
+            List of records that have existing outreach messages
+        """
+        try:
+            all_records = self.campaign_leads_table.all()
+            
+            results = []
+            for r in all_records:
+                fields = r['fields']
+                # Must have existing outreach (Email Body is the key field)
+                if not fields.get('Email Body'):
+                    continue
+                # Must be linked to enriched data
+                if not fields.get('Linked Lead'):
+                    continue
+                # Optional: filter by campaign name
+                if campaign_name:
+                    record_campaign = fields.get('Campaign Name', '') or fields.get('Conference Name', '')
+                    if campaign_name.lower() not in record_campaign.lower():
+                        continue
+                results.append(r)
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error getting campaign leads for refresh: {e}")
+            return []
+    
+    def refresh_outreach(self, limit: Optional[int] = None, 
+                         campaign_type: str = "general",
+                         campaign_name: str = None,
+                         dry_run: bool = False):
+        """
+        Regenerate outreach messages for Campaign Leads that already have messages.
+        
+        Uses the updated Company Profile-aware prompts to replace old generic messages
+        with value-proposition-driven outreach.
+        
+        Args:
+            limit: Max leads to refresh
+            campaign_type: Default campaign type
+            campaign_name: Optional — only refresh leads from this campaign
+            dry_run: If True, report what would be refreshed without making changes
+        """
+        leads = self.get_campaign_leads_for_refresh(campaign_name)
+        
+        if limit:
+            leads = leads[:limit]
+        
+        total = len(leads)
+        
+        if dry_run:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"DRY RUN — Would refresh outreach for {total} campaign leads")
+            logger.info(f"{'='*60}")
+            for idx, record in enumerate(leads[:20], 1):
+                fields = record['fields']
+                name = fields.get('Lead Name', 'Unknown')
+                company = fields.get('Company Name', '?')
+                campaign = fields.get('Campaign Name', '') or fields.get('Conference Name', 'general')
+                gen_date = fields.get('Message Generated Date', '?')
+                logger.info(f"  {idx}. {name} @ {company} — campaign: {campaign} — generated: {gen_date}")
+            if total > 20:
+                logger.info(f"  ... and {total - 20} more")
+            logger.info(f"\nRun without --dry-run to regenerate these messages.")
+            return
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"REFRESHING OUTREACH for {total} campaign leads")
+        logger.info(f"Using Company Profile-aware prompts")
+        if campaign_name:
+            logger.info(f"Filtered to campaign: {campaign_name}")
+        logger.info(f"{'='*60}\n")
+        
+        success = 0
+        errors = 0
+        
+        for idx, record in enumerate(leads, 1):
+            fields = record['fields']
+            record_id = record['id']
+            name = fields.get('Lead Name', 'Unknown')
+            company_display = fields.get('Company Name', '?')
+            
+            logger.info(f"[{idx}/{total}] Refreshing outreach for {name} @ {company_display}...")
+            
+            try:
+                # Get linked lead and company data
+                lead_record_ids = fields.get('Linked Lead', [])
+                company_record_ids = fields.get('Linked Company', [])
+                
+                lead_data = {}
+                company_data = {}
+                
+                if lead_record_ids:
+                    lead_data = self.leads_table.get(lead_record_ids[0])['fields']
+                if company_record_ids:
+                    company_data = self.companies_table.get(company_record_ids[0])['fields']
+                
+                # Extract campaign context
+                campaign_context = {
+                    'Campaign Type': fields.get('Campaign Type', campaign_type),
+                    'Conference Name': fields.get('Conference Name', ''),
+                    'Campaign Background': fields.get('Campaign Background', ''),
+                    'Campaign Date': fields.get('Campaign Date', ''),
+                }
+                
+                # Generate new messages with Company Profile context
+                messages = self.generate_outreach_messages(lead_data, company_data, campaign_context)
+                
+                if messages:
+                    if self.update_campaign_lead_outreach(record_id, messages):
+                        logger.info(f"  ✓ Outreach refreshed")
+                        success += 1
+                    else:
+                        logger.warning(f"  ⚠ Failed to update record")
+                        errors += 1
+                else:
+                    logger.warning(f"  ⚠ Failed to generate messages")
+                    errors += 1
+                
+                # Rate limiting
+                time.sleep(1)
+                    
+            except Exception as e:
+                logger.error(f"  ✗ Error: {e}")
+                errors += 1
+                continue
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"REFRESH COMPLETE")
+        logger.info(f"  ✓ Refreshed: {success}/{total}")
+        if errors:
+            logger.info(f"  ✗ Errors: {errors}")
+        logger.info(f"{'='*60}")
+    
     # ==================== BULK PROCESSING (2000+ leads) ====================
     
     def process_bulk(self, batch_size: int = 50, skip_outreach: bool = False,
@@ -2042,6 +2172,18 @@ Examples:
   
   # Parallel batch processing (used by GitHub Actions)
   python process_campaign_leads.py --limit 200 --offset 400
+  
+  # Refresh outreach — regenerate all existing messages with new prompts
+  python process_campaign_leads.py --refresh-outreach
+  
+  # Dry run — see what would be refreshed without changing anything
+  python process_campaign_leads.py --refresh-outreach --dry-run
+  
+  # Refresh only a specific campaign
+  python process_campaign_leads.py --refresh-outreach --campaign-name "DCAT 2025"
+  
+  # Refresh first 10 leads only (test run)
+  python process_campaign_leads.py --refresh-outreach --limit 10
         """
     )
     parser.add_argument('--config', default='config.yaml', help='Config file path')
@@ -2067,6 +2209,14 @@ Examples:
     parser.add_argument('--no-resume', action='store_true',
                         help='Process all leads, even if already processed')
     
+    # Refresh outreach options
+    parser.add_argument('--refresh-outreach', action='store_true',
+                        help='Regenerate outreach for campaign leads that already have messages')
+    parser.add_argument('--campaign-name', type=str, default=None,
+                        help='Filter refresh to a specific campaign (e.g. "DCAT 2025")')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='Show what would be refreshed without making changes')
+    
     args = parser.parse_args()
     
     processor = CampaignLeadsProcessor(args.config)
@@ -2079,6 +2229,14 @@ Examples:
             skip_outreach=args.skip_outreach,
             campaign_type=args.campaign_type,
             resume=resume
+        )
+    elif args.refresh_outreach:
+        # Refresh existing outreach with new prompts
+        processor.refresh_outreach(
+            limit=args.limit,
+            campaign_type=args.campaign_type,
+            campaign_name=args.campaign_name,
+            dry_run=args.dry_run
         )
     elif args.enrich_only:
         processor.process_enrichment(args.limit, args.offset)
