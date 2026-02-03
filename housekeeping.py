@@ -7,16 +7,19 @@ re-enriches records that fall below thresholds, and regenerates outreach message
 with version tracking.
 
 Usage:
+    # AUDIT FIRST (zero API calls — just read and score existing data)
+    python housekeeping.py --audit
+
     # Full housekeeping (screen → re-enrich → regenerate)
     python housekeeping.py
 
-    # Screen only (dry-run — report what needs fixing)
+    # Screen only (report what needs fixing, no changes)
     python housekeeping.py --screen-only
 
     # Only re-enrich companies
     python housekeeping.py --companies-only
 
-    # Only re-enrich leads  
+    # Only re-enrich leads
     python housekeeping.py --leads-only
 
     # Only regenerate outreach
@@ -35,12 +38,15 @@ import sys
 import time
 import argparse
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
+from collections import Counter
 
 import yaml
 import anthropic
-from pyairtable import Table
+from pyairtable import Api
+from confidence_utils import calculate_confidence_score
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +58,60 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def sanitize_string(s: str) -> str:
+    """Strip curly quotes, smart quotes, and other unicode quotation artifacts
+    that AI models sometimes produce, which Airtable rejects as new select options.
+    
+    "Cardiovascular" → Cardiovascular
+    'mAbs' → mAbs
+    """
+    if not isinstance(s, str):
+        return s
+    # Replace all unicode quote variants with straight quotes, then strip them
+    quote_chars = '""''‛‟「」『』〝〞＂＇'
+    for ch in quote_chars:
+        s = s.replace(ch, '')
+    # Also strip regular straight quotes at start/end
+    s = s.strip('"\'')
+    return s.strip()
+
+
+def safe_update(table, record_id: str, update_fields: Dict, 
+                label: str = "record") -> bool:
+    """Update Airtable record with per-field fallback.
+    
+    Tries the full update first. On failure, retries field-by-field
+    and logs which fields failed — avoids one bad field killing the
+    entire update.
+    """
+    try:
+        table.update(record_id, update_fields)
+        return True
+    except Exception as e:
+        error_str = str(e)
+        logger.warning(f"  Full update failed for {label}: {error_str}")
+        
+        # Identify the failing field from the error message
+        # Try field-by-field fallback
+        success_count = 0
+        failed_fields = []
+        for field_name, field_value in update_fields.items():
+            try:
+                table.update(record_id, {field_name: field_value})
+                success_count += 1
+            except Exception as field_err:
+                failed_fields.append(f"{field_name}: {field_err}")
+        
+        if failed_fields:
+            logger.warning(f"  Partial update: {success_count}/{len(update_fields)} fields succeeded")
+            for ff in failed_fields:
+                logger.warning(f"    ✗ {ff}")
+        else:
+            logger.info(f"  ✓ All {success_count} fields updated individually")
+        
+        return success_count > 0
 
 
 class HousekeepingManager:
@@ -67,7 +127,7 @@ class HousekeepingManager:
         'failed': 0,
     }
     
-    # Valid select field options (shared across the system)
+    # Valid select field options (must match Airtable exactly)
     VALID_COMPANY_SIZE = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+']
     VALID_FOCUS_AREAS = ['mAbs', 'Bispecifics', 'ADCs', 'Recombinant Proteins',
                          'Cell Therapy', 'Gene Therapy', 'Vaccines', 'Other']
@@ -85,12 +145,13 @@ class HousekeepingManager:
         api_key = self.config['airtable']['api_key']
         base_id = self.config['airtable']['base_id']
         
-        self.companies_table = Table(api_key, base_id, 'Companies')
-        self.leads_table = Table(api_key, base_id, 'Leads')
+        api = Api(api_key)
+        self.companies_table = api.table(base_id, 'Companies')
+        self.leads_table = api.table(base_id, 'Leads')
         
         # Optional tables — graceful if not present
         try:
-            self.trigger_history_table = Table(api_key, base_id, 'Trigger History')
+            self.trigger_history_table = api.table(base_id, 'Trigger History')
             self.has_triggers = True
         except:
             self.has_triggers = False
@@ -101,7 +162,304 @@ class HousekeepingManager:
         
         self.rate_limit_delay = self.config.get('web_search', {}).get('rate_limit_delay', 2)
         
+        # Detect which fields exist in Leads table (to avoid UNKNOWN_FIELD_NAME errors)
+        self._leads_has_data_confidence = None
+        self._leads_has_outreach_version = None
+        self._leads_has_validity_rating = None
+        
         logger.info("✓ HousekeepingManager initialized")
+    
+    def _detect_leads_fields(self):
+        """Detect which optional fields exist in the Leads table.
+        Done lazily on first write attempt to avoid extra API calls."""
+        if self._leads_has_data_confidence is not None:
+            return  # Already detected
+        
+        try:
+            # Fetch one lead to check available fields
+            test_leads = self.leads_table.all(max_records=1)
+            if test_leads:
+                available_fields = set(test_leads[0]['fields'].keys())
+                # Also try to update with each field to check writability
+                # For now, use field name presence as a hint (not perfect but avoids writes)
+                self._leads_has_data_confidence = True  # Assume yes, catch on write
+                self._leads_has_outreach_version = True
+                self._leads_has_validity_rating = True
+                logger.info("  Field detection: assuming all optional fields exist (will fallback on write)")
+            else:
+                self._leads_has_data_confidence = True
+                self._leads_has_outreach_version = True
+                self._leads_has_validity_rating = True
+        except:
+            self._leads_has_data_confidence = True
+            self._leads_has_outreach_version = True
+            self._leads_has_validity_rating = True
+    
+    # ═══════════════════════════════════════════════════════════
+    # AUDIT — Zero-cost data quality assessment
+    # ═══════════════════════════════════════════════════════════
+    
+    def run_audit(self) -> Dict:
+        """Comprehensive data quality audit — ZERO API calls to Anthropic.
+        
+        Reads all records from Airtable and scores data completeness and
+        confidence across companies, leads, and outreach. Produces a
+        detailed report before any money is spent on re-enrichment.
+        """
+        logger.info("="*70)
+        logger.info("DATA QUALITY AUDIT")
+        logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("This audit uses ZERO Anthropic API calls.")
+        logger.info("="*70)
+        
+        audit = {}
+        
+        # ─── COMPANIES ───
+        logger.info("\n" + "─"*50)
+        logger.info("AUDITING COMPANIES")
+        logger.info("─"*50)
+        
+        all_companies = self.companies_table.all()
+        total_companies = len(all_companies)
+        
+        company_stats = {
+            'total': total_companies,
+            'enriched': 0,
+            'not_enriched': 0,
+            'failed': 0,
+            'has_confidence': 0,
+            'missing_confidence': 0,
+            'confidence_distribution': Counter(),
+            'missing_fields': Counter(),
+            'icp_distribution': {'0-20': 0, '21-40': 0, '41-60': 0, '61-80': 0, '81-100': 0},
+        }
+        
+        key_company_fields = [
+            'Website', 'Location/HQ', 'Funding Stage', 'Pipeline Stage', 
+            'Therapeutic Areas', 'Technology Platform', 'Manufacturing Status',
+            'Focus Area', 'ICP Fit Score'
+        ]
+        
+        for record in all_companies:
+            fields = record['fields']
+            status = fields.get('Enrichment Status', '')
+            
+            if status == 'Enriched':
+                company_stats['enriched'] += 1
+            elif status == 'Failed':
+                company_stats['failed'] += 1
+            else:
+                company_stats['not_enriched'] += 1
+            
+            # Confidence
+            raw_conf = fields.get('Data Confidence', '')
+            if raw_conf:
+                company_stats['has_confidence'] += 1
+                score = self.calculate_record_confidence_score(raw_conf)
+                if score >= 85:
+                    company_stats['confidence_distribution']['excellent (85-100)'] += 1
+                elif score >= 70:
+                    company_stats['confidence_distribution']['good (70-84)'] += 1
+                elif score >= 40:
+                    company_stats['confidence_distribution']['fair (40-69)'] += 1
+                else:
+                    company_stats['confidence_distribution']['poor (0-39)'] += 1
+            else:
+                company_stats['missing_confidence'] += 1
+            
+            # Missing fields (only for enriched records)
+            if status == 'Enriched':
+                for field in key_company_fields:
+                    val = fields.get(field)
+                    if not val or val == 'Unknown' or val == [] or val == ['Unknown']:
+                        company_stats['missing_fields'][field] += 1
+            
+            # ICP distribution
+            icp = fields.get('ICP Fit Score')
+            if icp is not None:
+                if icp <= 20: company_stats['icp_distribution']['0-20'] += 1
+                elif icp <= 40: company_stats['icp_distribution']['21-40'] += 1
+                elif icp <= 60: company_stats['icp_distribution']['41-60'] += 1
+                elif icp <= 80: company_stats['icp_distribution']['61-80'] += 1
+                else: company_stats['icp_distribution']['81-100'] += 1
+        
+        logger.info(f"Total companies: {total_companies}")
+        logger.info(f"  Enriched: {company_stats['enriched']}")
+        logger.info(f"  Not enriched: {company_stats['not_enriched']}")
+        logger.info(f"  Failed: {company_stats['failed']}")
+        logger.info(f"\nData Confidence Coverage:")
+        logger.info(f"  Has confidence data: {company_stats['has_confidence']} ({company_stats['has_confidence']*100//max(total_companies,1)}%)")
+        logger.info(f"  Missing confidence: {company_stats['missing_confidence']} ({company_stats['missing_confidence']*100//max(total_companies,1)}%)")
+        if company_stats['has_confidence'] > 0:
+            logger.info(f"\nConfidence Distribution (of {company_stats['has_confidence']} with data):")
+            for level, count in sorted(company_stats['confidence_distribution'].items()):
+                pct = count * 100 // company_stats['has_confidence']
+                bar = "█" * (pct // 2)
+                logger.info(f"  {level:25s}: {count:5d} ({pct:2d}%) {bar}")
+        
+        if company_stats['enriched'] > 0:
+            logger.info(f"\nMissing Fields (of {company_stats['enriched']} enriched companies):")
+            for field, count in company_stats['missing_fields'].most_common():
+                pct = count * 100 // company_stats['enriched']
+                logger.info(f"  {field:25s}: {count:5d} missing ({pct}%)")
+        
+        logger.info(f"\nICP Score Distribution:")
+        for bucket, count in sorted(company_stats['icp_distribution'].items()):
+            bar = "█" * (count // max(total_companies // 100, 1))
+            logger.info(f"  {bucket:10s}: {count:5d} {bar}")
+        
+        audit['companies'] = company_stats
+        
+        # ─── LEADS ───
+        logger.info("\n" + "─"*50)
+        logger.info("AUDITING LEADS")
+        logger.info("─"*50)
+        
+        all_leads = self.leads_table.all()
+        total_leads = len(all_leads)
+        
+        lead_stats = {
+            'total': total_leads,
+            'enriched': 0,
+            'not_enriched': 0,
+            'has_confidence': 0,
+            'missing_confidence': 0,
+            'confidence_distribution': Counter(),
+            'has_email': 0,
+            'has_linkedin': 0,
+            'has_title': 0,
+            'has_outreach': 0,
+            'has_validity_score': 0,
+            'validity_distribution': Counter(),
+            'outreach_version_distribution': Counter(),
+        }
+        
+        for record in all_leads:
+            fields = record['fields']
+            status = fields.get('Enrichment Status', '')
+            
+            if status == 'Enriched':
+                lead_stats['enriched'] += 1
+            else:
+                lead_stats['not_enriched'] += 1
+            
+            # Confidence
+            raw_conf = fields.get('Data Confidence', '')
+            if raw_conf:
+                lead_stats['has_confidence'] += 1
+                score = self.calculate_record_confidence_score(raw_conf)
+                if score >= 85:
+                    lead_stats['confidence_distribution']['excellent (85-100)'] += 1
+                elif score >= 70:
+                    lead_stats['confidence_distribution']['good (70-84)'] += 1
+                elif score >= 40:
+                    lead_stats['confidence_distribution']['fair (40-69)'] += 1
+                else:
+                    lead_stats['confidence_distribution']['poor (0-39)'] += 1
+            else:
+                lead_stats['missing_confidence'] += 1
+            
+            # Contact data
+            if fields.get('Email'):
+                lead_stats['has_email'] += 1
+            if fields.get('LinkedIn URL'):
+                lead_stats['has_linkedin'] += 1
+            if fields.get('Title'):
+                lead_stats['has_title'] += 1
+            
+            # Outreach
+            if fields.get('Email Body', '').strip():
+                lead_stats['has_outreach'] += 1
+            
+            validity = fields.get('Outreach Validity Score')
+            if validity is not None:
+                lead_stats['has_validity_score'] += 1
+                if validity >= 85:
+                    lead_stats['validity_distribution']['excellent (85-100)'] += 1
+                elif validity >= 70:
+                    lead_stats['validity_distribution']['good (70-84)'] += 1
+                elif validity >= 50:
+                    lead_stats['validity_distribution']['fair (50-69)'] += 1
+                else:
+                    lead_stats['validity_distribution']['poor (0-49)'] += 1
+            
+            version = fields.get('Outreach Version', 0) or 0
+            lead_stats['outreach_version_distribution'][f'v{int(version)}'] += 1
+        
+        logger.info(f"Total leads: {total_leads}")
+        logger.info(f"  Enriched: {lead_stats['enriched']}")
+        logger.info(f"  Not enriched: {lead_stats['not_enriched']}")
+        logger.info(f"\nContact Data Coverage (of {total_leads} total):")
+        logger.info(f"  Has email:    {lead_stats['has_email']:5d} ({lead_stats['has_email']*100//max(total_leads,1)}%)")
+        logger.info(f"  Has LinkedIn: {lead_stats['has_linkedin']:5d} ({lead_stats['has_linkedin']*100//max(total_leads,1)}%)")
+        logger.info(f"  Has title:    {lead_stats['has_title']:5d} ({lead_stats['has_title']*100//max(total_leads,1)}%)")
+        logger.info(f"\nData Confidence Coverage:")
+        logger.info(f"  Has confidence: {lead_stats['has_confidence']} ({lead_stats['has_confidence']*100//max(total_leads,1)}%)")
+        logger.info(f"  Missing:        {lead_stats['missing_confidence']} ({lead_stats['missing_confidence']*100//max(total_leads,1)}%)")
+        if lead_stats['has_confidence'] > 0:
+            logger.info(f"\nConfidence Distribution (of {lead_stats['has_confidence']} with data):")
+            for level, count in sorted(lead_stats['confidence_distribution'].items()):
+                pct = count * 100 // lead_stats['has_confidence']
+                bar = "█" * (pct // 2)
+                logger.info(f"  {level:25s}: {count:5d} ({pct:2d}%) {bar}")
+        
+        logger.info(f"\nOutreach Coverage:")
+        logger.info(f"  Has outreach:        {lead_stats['has_outreach']}")
+        logger.info(f"  Has validity score:  {lead_stats['has_validity_score']}")
+        if lead_stats['has_validity_score'] > 0:
+            logger.info(f"\nOutreach Validity Distribution:")
+            for level, count in sorted(lead_stats['validity_distribution'].items()):
+                pct = count * 100 // lead_stats['has_validity_score']
+                bar = "█" * (pct // 2)
+                logger.info(f"  {level:25s}: {count:5d} ({pct:2d}%) {bar}")
+        
+        logger.info(f"\nOutreach Version Distribution:")
+        for version, count in sorted(lead_stats['outreach_version_distribution'].items()):
+            logger.info(f"  {version:5s}: {count:5d}")
+        
+        audit['leads'] = lead_stats
+        
+        # ─── COST ESTIMATE ───
+        logger.info("\n" + "─"*50)
+        logger.info("ESTIMATED HOUSEKEEPING COST")
+        logger.info("─"*50)
+        
+        companies_needing_work = company_stats['missing_confidence'] + \
+            sum(v for k, v in company_stats['confidence_distribution'].items() 
+                if 'poor' in k or 'fair' in k)
+        leads_needing_work = lead_stats['missing_confidence'] + \
+            sum(v for k, v in lead_stats['confidence_distribution'].items() 
+                if 'poor' in k or 'fair' in k)
+        outreach_needing_work = lead_stats['has_outreach'] - lead_stats['has_validity_score'] + \
+            sum(v for k, v in lead_stats['validity_distribution'].items() 
+                if 'poor' in k or 'fair' in k)
+        
+        # Rough cost: ~$0.02 per web search enrichment, ~$0.005 per outreach generation
+        est_enrichment_cost = (companies_needing_work + leads_needing_work) * 0.02
+        est_outreach_cost = max(outreach_needing_work, 0) * 0.005
+        est_total = est_enrichment_cost + est_outreach_cost
+        
+        logger.info(f"Records below threshold (85):")
+        logger.info(f"  Companies: ~{companies_needing_work} need re-enrichment")
+        logger.info(f"  Leads:     ~{leads_needing_work} need re-enrichment")
+        logger.info(f"  Outreach:  ~{max(outreach_needing_work, 0)} need regeneration")
+        logger.info(f"\nEstimated API cost (rough):")
+        logger.info(f"  Enrichment: ~${est_enrichment_cost:.2f}")
+        logger.info(f"  Outreach:   ~${est_outreach_cost:.2f}")
+        logger.info(f"  TOTAL:      ~${est_total:.2f}")
+        logger.info(f"\nRecommendation:")
+        if companies_needing_work > 500:
+            logger.info(f"  ⚠ {companies_needing_work} companies need work — run with --limit 100 first")
+        if est_total > 50:
+            logger.info(f"  ⚠ Estimated cost >${est_total:.0f} — consider batching with --limit")
+        if companies_needing_work < 50 and leads_needing_work < 50:
+            logger.info(f"  ✓ Small batch — safe to run full housekeeping")
+        
+        logger.info("\n" + "="*70)
+        logger.info("AUDIT COMPLETE — No records were modified")
+        logger.info("="*70)
+        
+        return audit
     
     # ═══════════════════════════════════════════════════════════
     # SCREENING — Identify records needing attention
@@ -109,35 +467,12 @@ class HousekeepingManager:
     
     def calculate_record_confidence_score(self, data_confidence_raw: str) -> int:
         """Convert Data Confidence JSON to a single numeric score (0-100).
-        
-        Returns the MINIMUM confidence across all fields — the chain is only
-        as strong as the weakest link.
+        Delegates to the shared confidence_utils module.
         """
-        if not data_confidence_raw:
-            return 0  # No confidence data = needs enrichment
-        
-        try:
-            conf = json.loads(data_confidence_raw)
-            if not conf:
-                return 0
-            
-            scores = []
-            for field, level in conf.items():
-                score = self.CONFIDENCE_SCORES.get(str(level).lower(), 0)
-                scores.append(score)
-            
-            return min(scores) if scores else 0
-        except (json.JSONDecodeError, AttributeError):
-            return 0
+        return calculate_confidence_score(data_confidence_raw)
     
     def screen_companies(self, threshold: int = 85) -> List[Dict]:
-        """Find companies needing re-enrichment.
-        
-        Returns companies where:
-        - Data Confidence is missing entirely
-        - Overall confidence score < threshold
-        - Enriched but no confidence data (legacy records)
-        """
+        """Find companies needing re-enrichment."""
         all_companies = self.companies_table.all(
             formula="OR({Enrichment Status} = 'Enriched', {Enrichment Status} = 'Failed')"
         )
@@ -188,17 +523,9 @@ class HousekeepingManager:
         return needs_work
     
     def screen_outreach(self, threshold: int = 85) -> Dict[str, List[Dict]]:
-        """Find outreach messages needing regeneration.
-        
-        Returns dict with 'leads' and 'triggers' lists.
-        Checks:
-        - Missing Outreach Validity Score
-        - Outreach Validity Score < threshold
-        - Has enrichment data but no outreach
-        """
+        """Find outreach messages needing regeneration."""
         result = {'leads': [], 'triggers': []}
         
-        # Screen lead outreach
         all_leads = self.leads_table.all(
             formula="AND({Enrichment Status} = 'Enriched', {Lead ICP Score} >= 40)"
         )
@@ -208,7 +535,6 @@ class HousekeepingManager:
             validity_score = fields.get('Outreach Validity Score', None)
             has_email_body = bool(fields.get('Email Body', '').strip())
             
-            # Needs outreach if: no messages at all, or low validity score
             if not has_email_body:
                 result['leads'].append({
                     'record': record,
@@ -265,6 +591,42 @@ class HousekeepingManager:
     # RE-ENRICHMENT — Company
     # ═══════════════════════════════════════════════════════════
     
+    def _validate_multi_select(self, values, valid_list: List[str]) -> List[str]:
+        """Sanitize and validate multi-select values against allowed options.
+        
+        Strips curly quotes and other AI artifacts, then filters to valid options only.
+        """
+        if not values:
+            return []
+        if isinstance(values, str):
+            values = [values]
+        
+        validated = []
+        for v in values:
+            clean = sanitize_string(v)
+            if clean in valid_list:
+                validated.append(clean)
+            else:
+                # Try case-insensitive match
+                for valid in valid_list:
+                    if clean.lower() == valid.lower():
+                        validated.append(valid)  # Use the canonical casing
+                        break
+        return validated
+    
+    def _validate_single_select(self, value: str, valid_list: List[str]) -> Optional[str]:
+        """Sanitize and validate a single-select value."""
+        if not value:
+            return None
+        clean = sanitize_string(value)
+        if clean in valid_list:
+            return clean
+        # Case-insensitive fallback
+        for valid in valid_list:
+            if clean.lower() == valid.lower():
+                return valid
+        return None
+    
     def re_enrich_company(self, record: Dict) -> bool:
         """Re-enrich a single company record."""
         fields = record['fields']
@@ -285,22 +647,13 @@ CRITICAL RULES:
 5. CDMO PARTNERSHIPS: Only if confirmed. "None found" is valid.
 6. Per-field confidence: "high" (multiple sources), "medium" (single source), "low" (inferred), "unverified" (not found).
 
-Find (return null for unverifiable data):
-1. Website URL
-2. LinkedIn company page URL  
-3. Headquarters (city, country)
-4. Company size — one of: {', '.join(self.VALID_COMPANY_SIZE)}
-5. Focus areas — from: {', '.join(self.VALID_FOCUS_AREAS)}
-6. Technology platform — from: {', '.join(self.VALID_TECH_PLATFORMS)}
-7. Funding stage — one of: {', '.join(self.VALID_FUNDING_STAGES)}
-8. Total funding USD — ONLY if found
-9. Latest funding round — ONLY if found
-10. Pipeline stages — from: {', '.join(self.VALID_PIPELINE_STAGES)}
-11. Lead programs
-12. Therapeutic areas — from: {', '.join(self.VALID_THERAPEUTIC_AREAS)}
-13. CDMO partnerships — ONLY if confirmed
-14. Manufacturing status — one of: {', '.join(self.VALID_MANUFACTURING_STATUS)}
-15. Recent news
+IMPORTANT: Use EXACTLY these values for select fields — no quotes around values, no extra characters:
+- Focus areas: {', '.join(self.VALID_FOCUS_AREAS)}
+- Technology platforms: {', '.join(self.VALID_TECH_PLATFORMS)}
+- Funding stages: {', '.join(self.VALID_FUNDING_STAGES)}
+- Pipeline stages: {', '.join(self.VALID_PIPELINE_STAGES)}
+- Therapeutic areas: {', '.join(self.VALID_THERAPEUTIC_AREAS)}
+- Manufacturing status: {', '.join(self.VALID_MANUFACTURING_STATUS)}
 
 Return ONLY valid JSON:
 {{
@@ -358,7 +711,7 @@ Return ONLY valid JSON:
                 'Last Intelligence Check': datetime.now().strftime('%Y-%m-%d')
             }
             
-            # Map enriched fields
+            # Simple text fields
             field_map = {
                 'website': 'Website',
                 'linkedin_company_page': 'LinkedIn Company Page',
@@ -369,13 +722,18 @@ Return ONLY valid JSON:
             }
             for json_key, airtable_key in field_map.items():
                 if data.get(json_key):
-                    update_fields[airtable_key] = data[json_key]
+                    update_fields[airtable_key] = sanitize_string(str(data[json_key]))
             
-            # Funding stage
-            if data.get('funding_stage'):
-                val = data['funding_stage']
-                if val in self.VALID_FUNDING_STAGES:
-                    update_fields['Funding Stage'] = val
+            # Single-select fields — validated
+            funding = self._validate_single_select(
+                data.get('funding_stage', ''), self.VALID_FUNDING_STAGES)
+            if funding:
+                update_fields['Funding Stage'] = funding
+            
+            mfg = self._validate_single_select(
+                data.get('manufacturing_status', ''), self.VALID_MANUFACTURING_STATUS)
+            if mfg:
+                update_fields['Manufacturing Status'] = mfg
             
             # Total funding
             if data.get('total_funding_usd'):
@@ -384,34 +742,24 @@ Return ONLY valid JSON:
                 except:
                     pass
             
-            # Manufacturing status
-            if data.get('manufacturing_status'):
-                val = data['manufacturing_status']
-                if val in self.VALID_MANUFACTURING_STATUS:
-                    update_fields['Manufacturing Status'] = val
-            
-            # Multi-selects
+            # Multi-select fields — validated and sanitized
             for json_key, airtable_key, valid_list in [
                 ('focus_areas', 'Focus Area', self.VALID_FOCUS_AREAS),
                 ('technology_platforms', 'Technology Platform', self.VALID_TECH_PLATFORMS),
                 ('therapeutic_areas', 'Therapeutic Areas', self.VALID_THERAPEUTIC_AREAS),
                 ('pipeline_stages', 'Pipeline Stage', self.VALID_PIPELINE_STAGES),
             ]:
-                values = data.get(json_key, [])
-                if values:
-                    if isinstance(values, str):
-                        values = [values]
-                    validated = [v for v in values if v in valid_list]
-                    if validated:
-                        update_fields[airtable_key] = validated
+                validated = self._validate_multi_select(data.get(json_key, []), valid_list)
+                if validated:
+                    update_fields[airtable_key] = validated
             
             # Intelligence Notes with confidence
             data_confidence = data.get('data_confidence', {})
             notes_parts = []
             if data.get('intelligence_notes'):
-                notes_parts.append(data['intelligence_notes'][:500])
+                notes_parts.append(sanitize_string(data['intelligence_notes'][:500]))
             if data.get('recent_news'):
-                notes_parts.append(f"Recent: {data['recent_news'][:300]}")
+                notes_parts.append(f"Recent: {sanitize_string(data['recent_news'][:300])}")
             if data_confidence:
                 low_conf = [f"⚠ {k}: {v}" for k, v in data_confidence.items() if v in ('low', 'unverified')]
                 if low_conf:
@@ -422,9 +770,9 @@ Return ONLY valid JSON:
             # Store confidence
             if data_confidence:
                 update_fields['Data Confidence'] = json.dumps(data_confidence)
+                update_fields['Data Confidence Score'] = calculate_confidence_score(data_confidence)
             
-            self.companies_table.update(record_id, update_fields)
-            return True
+            return safe_update(self.companies_table, record_id, update_fields, label=company_name)
             
         except Exception as e:
             logger.error(f"  Error re-enriching company: {e}")
@@ -529,13 +877,13 @@ Return ONLY valid JSON:
             if data.get('linkedin_url') and 'linkedin.com' in str(data.get('linkedin_url', '')):
                 update_fields['LinkedIn URL'] = data['linkedin_url']
             
-            # Store confidence
+            # Store confidence — use safe_update so missing field doesn't crash
             lead_conf = data.get('data_confidence', {})
             if lead_conf:
                 update_fields['Data Confidence'] = json.dumps(lead_conf)
+                update_fields['Data Confidence Score'] = calculate_confidence_score(lead_conf)
             
-            self.leads_table.update(record_id, update_fields)
-            return True
+            return safe_update(self.leads_table, record_id, update_fields, label=lead_name)
             
         except Exception as e:
             logger.error(f"  Error re-enriching lead: {e}")
@@ -550,11 +898,7 @@ Return ONLY valid JSON:
         return int(fields.get('Outreach Version', 0) or 0)
     
     def regenerate_lead_outreach(self, record: Dict, max_version: int = 10) -> bool:
-        """Regenerate outreach for a lead with version tracking.
-        
-        Increments Outreach Version on each regeneration.
-        Stops if version >= max_version (prevent infinite loops).
-        """
+        """Regenerate outreach for a lead with version tracking."""
         fields = record['fields']
         lead_name = fields.get('Lead Name', 'Unknown')
         title = fields.get('Title', '')
@@ -582,7 +926,7 @@ Return ONLY valid JSON:
                     'pipeline_stage': ', '.join(cf.get('Pipeline Stage', [])),
                 }
                 
-                # Filter by confidence
+                # Filter by confidence — omit low/unverified data from prompt
                 raw_conf = cf.get('Data Confidence', '')
                 if raw_conf:
                     try:
@@ -600,7 +944,6 @@ Return ONLY valid JSON:
             company_name = fields.get('Company Name', 'Unknown')
         
         lead_icp = fields.get('Lead ICP Score', 50)
-        company_icp = fields.get('Company ICP Score', None)
         
         # Build context for outreach generation
         context_parts = [f"Title: {title}", f"Company: {company_name}"]
@@ -611,6 +954,10 @@ Return ONLY valid JSON:
         
         context_str = "\n".join(context_parts)
         
+        version_note = ""
+        if current_version > 0:
+            version_note = "Previous versions scored below quality threshold — make this one better."
+        
         prompt = f"""Generate professional outreach messages for this lead.
 
 LEAD: {lead_name}
@@ -620,7 +967,7 @@ Lead ICP: {lead_icp}/100
 YOUR COMPANY (Rezon Bio):
 European CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs).
 
-This is VERSION {new_version} of the outreach. {"Previous versions scored below quality threshold — make this one better." if current_version > 0 else ""}
+This is VERSION {new_version} of the outreach. {version_note}
 
 ═══════════════════════════════════════════════════════════
 CRITICAL RULES:
@@ -692,7 +1039,7 @@ Return ONLY valid JSON:
             
             messages_data = json.loads(response_text)
             
-            # Update lead with new outreach + version
+            # Core outreach fields (always safe)
             update_fields = {
                 'Email Subject': messages_data.get('email_subject', ''),
                 'Email Body': messages_data.get('email_body', ''),
@@ -701,14 +1048,18 @@ Return ONLY valid JSON:
                 'LinkedIn InMail Subject': messages_data.get('linkedin_inmail_subject', ''),
                 'LinkedIn InMail Body': messages_data.get('linkedin_inmail_body', ''),
                 'Message Generated Date': datetime.now().strftime('%Y-%m-%d'),
-                'Outreach Version': new_version,
-                # Reset validation so it gets re-validated
-                'Outreach Validity Rating': '',
-                'Outreach Validity Score': None,
             }
             
-            self.leads_table.update(record_id, update_fields)
-            return True
+            # Optional fields — added separately so they don't crash the whole update
+            # Outreach Version (Number field — may not exist yet)
+            update_fields['Outreach Version'] = new_version
+            
+            # Reset validity so next validation run re-scores
+            # NOTE: Do NOT set to '' (empty string) — Airtable treats that as
+            # creating a new select option. Set to None or omit entirely.
+            update_fields['Outreach Validity Score'] = None
+            
+            return safe_update(self.leads_table, record_id, update_fields, label=lead_name)
             
         except Exception as e:
             logger.error(f"  Error regenerating outreach: {e}")
@@ -749,6 +1100,10 @@ Return ONLY valid JSON:
         trigger_details = fields.get('Trigger Details', fields.get('Description', ''))
         trigger_date = fields.get('Trigger Date', '')
         
+        version_note = ""
+        if current_version > 0:
+            version_note = "Previous versions scored below quality threshold — make this one better."
+        
         prompt = f"""Generate trigger-based outreach for this lead.
 
 LEAD: {lead_name}
@@ -758,7 +1113,7 @@ TRIGGER: {trigger_type}
 TRIGGER DETAILS: {trigger_details[:500]}
 TRIGGER DATE: {trigger_date}
 
-This is VERSION {new_version}.
+This is VERSION {new_version}. {version_note}
 
 YOUR COMPANY (Rezon Bio): European CDMO for mammalian cell culture (mAbs, bispecifics, ADCs).
 
@@ -815,12 +1170,10 @@ Return ONLY valid JSON:
                 'Best Time to Send': messages_data.get('best_time_to_send', ''),
                 'Follow Up Angle': messages_data.get('follow_up_angle', ''),
                 'Outreach Version': new_version,
-                'Outreach Validity Rating': '',
                 'Outreach Validity Score': None,
             }
             
-            self.trigger_history_table.update(record_id, update_fields)
-            return True
+            return safe_update(self.trigger_history_table, record_id, update_fields, label=f"trigger-{trigger_type}")
             
         except Exception as e:
             logger.error(f"  Error regenerating trigger outreach: {e}")
@@ -841,7 +1194,6 @@ Return ONLY valid JSON:
         leads = self.screen_leads(threshold)
         outreach = self.screen_outreach(threshold)
         
-        # Print summary
         logger.info(f"\n{'─'*50}")
         logger.info(f"COMPANIES needing re-enrichment: {len(companies)}")
         if companies:
@@ -881,14 +1233,21 @@ Return ONLY valid JSON:
             'total': total
         }
     
-    def run_full(self, threshold: int = 85, limit: int = None,
+    def run_full(self, threshold: int = 85, limit: int = None, offset: int = 0,
                  companies_only: bool = False, leads_only: bool = False,
                  outreach_only: bool = False):
-        """Run full housekeeping: screen → re-enrich → regenerate."""
+        """Run full housekeeping: screen → re-enrich → regenerate.
+        
+        Args:
+            threshold: Confidence threshold (0-100)
+            limit: Max records per category to process
+            offset: Skip this many records (for parallel batching)
+            companies_only/leads_only/outreach_only: Run only one phase
+        """
         
         logger.info("="*70)
         logger.info("HOUSEKEEPING — FULL RUN")
-        logger.info(f"Threshold: {threshold} | Limit: {limit or 'unlimited'}")
+        logger.info(f"Threshold: {threshold} | Limit: {limit or 'unlimited'} | Offset: {offset}")
         logger.info(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*70)
         
@@ -906,9 +1265,13 @@ Return ONLY valid JSON:
             logger.info("─"*50)
             
             companies = self.screen_companies(threshold)
+            total_needing = len(companies)
+            # Apply offset + limit for parallel batching
+            companies = companies[offset:]
             if limit:
                 companies = companies[:limit]
             stats['companies_screened'] = len(companies)
+            logger.info(f"Total needing work: {total_needing} | This batch: {len(companies)} (offset {offset})")
             
             for idx, item in enumerate(companies, 1):
                 name = item['record']['fields'].get('Company Name', '?')
@@ -932,9 +1295,12 @@ Return ONLY valid JSON:
             logger.info("─"*50)
             
             leads = self.screen_leads(threshold)
+            total_needing = len(leads)
+            leads = leads[offset:]
             if limit:
                 leads = leads[:limit]
             stats['leads_screened'] = len(leads)
+            logger.info(f"Total needing work: {total_needing} | This batch: {len(leads)} (offset {offset})")
             
             for idx, item in enumerate(leads, 1):
                 name = item['record']['fields'].get('Lead Name', '?')
@@ -961,9 +1327,12 @@ Return ONLY valid JSON:
             
             # Lead outreach
             lead_outreach = outreach['leads']
+            total_needing = len(lead_outreach)
+            lead_outreach = lead_outreach[offset:]
             if limit:
                 lead_outreach = lead_outreach[:limit]
             stats['outreach_screened'] = len(lead_outreach)
+            logger.info(f"Total needing work: {total_needing} | This batch: {len(lead_outreach)} (offset {offset})")
             
             for idx, item in enumerate(lead_outreach, 1):
                 name = item['record']['fields'].get('Lead Name', '?')
@@ -981,6 +1350,7 @@ Return ONLY valid JSON:
             
             # Trigger outreach
             trigger_outreach = outreach['triggers']
+            trigger_outreach = trigger_outreach[offset:]
             if limit:
                 trigger_outreach = trigger_outreach[:limit]
             
@@ -1013,6 +1383,8 @@ Return ONLY valid JSON:
 
 def main():
     parser = argparse.ArgumentParser(description='Housekeeping — Background quality maintenance')
+    parser.add_argument('--audit', action='store_true',
+                       help='Run data quality audit (ZERO API calls to Anthropic — read-only)')
     parser.add_argument('--screen-only', action='store_true',
                        help='Only screen and report (dry-run, no changes)')
     parser.add_argument('--companies-only', action='store_true',
@@ -1025,6 +1397,8 @@ def main():
                        help='Confidence threshold (default: 85)')
     parser.add_argument('--limit', type=int, default=None,
                        help='Limit records per category')
+    parser.add_argument('--offset', type=int, default=0,
+                       help='Skip this many records (for parallel batching)')
     parser.add_argument('--config', default='config.yaml',
                        help='Path to config file')
     
@@ -1033,12 +1407,15 @@ def main():
     try:
         manager = HousekeepingManager(config_path=args.config)
         
-        if args.screen_only:
+        if args.audit:
+            manager.run_audit()
+        elif args.screen_only:
             manager.run_screen(threshold=args.confidence_threshold)
         else:
             manager.run_full(
                 threshold=args.confidence_threshold,
                 limit=args.limit,
+                offset=args.offset,
                 companies_only=args.companies_only,
                 leads_only=args.leads_only,
                 outreach_only=args.outreach_only,
