@@ -15,9 +15,9 @@ from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import (load_company_profile, build_value_proposition, 
+from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention)
+                                   suppressed_to_do_not_mention, classify_persona)
 
 # Configure logging
 logging.basicConfig(
@@ -61,6 +61,7 @@ class LeadEnricher:
         
         # Load Company Profile for value-driven outreach
         self.company_profile = load_company_profile(self.base)
+        self.persona_messaging = load_persona_messaging(self.base)
         
         logger.info("LeadEnricher initialized successfully")
     
@@ -820,7 +821,7 @@ Only return the JSON, no other text."""
             pass
         
         # Build value proposition and philosophy
-        value_prop = build_value_proposition(self.company_profile, company_fields, title)
+        value_prop = build_value_proposition(self.company_profile, company_fields, title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate professional outreach messages for this lead.
@@ -973,6 +974,7 @@ Only return valid JSON."""
         if enriched_data.get('title'):
             title = enriched_data['title'].strip()
             update_fields['Title'] = title
+            update_fields['Persona Category'] = classify_persona(title)
             title_conf = enriched_data.get('title_confidence', 'Unknown')
             title_source = enriched_data.get('title_source', 'Not specified')
             notes_parts.append(f"Title: {title} (Confidence: {title_conf}, Source: {title_source})")
