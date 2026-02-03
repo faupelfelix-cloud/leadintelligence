@@ -14,9 +14,9 @@ from datetime import datetime
 from typing import Dict, Optional
 import anthropic
 from pyairtable import Api
-from company_profile_utils import (load_company_profile, build_value_proposition, 
+from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention)
+                                   suppressed_to_do_not_mention, classify_persona)
 
 # Configure logging
 logging.basicConfig(
@@ -50,6 +50,7 @@ class DeepLeadProfiler:
         
         # Load company profile for outreach context
         self.company_profile = load_company_profile(self.base)
+        self.persona_messaging = load_persona_messaging(self.base)
         
         logger.info("DeepLeadProfiler initialized successfully")
     
@@ -87,7 +88,7 @@ class DeepLeadProfiler:
             pass
         
         # Build value proposition matched to prospect
-        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         # Build personalization context from deep profile
