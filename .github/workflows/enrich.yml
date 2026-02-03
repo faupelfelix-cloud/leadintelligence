@@ -12,6 +12,8 @@ on:
           - 'Enrich Companies'
           - 'Enrich Leads'
           - 'Enrich Both (Companies + Leads)'
+          - 'Re-enrich Low Confidence Companies'
+          - 'Re-enrich Companies Below Threshold'
           - 'Batch Enrich Companies (parallel)'
           - 'Batch Enrich Leads (parallel)'
           - 'Validate Setup Only'
@@ -25,6 +27,11 @@ on:
         required: false
         type: string
         default: 'all'
+      icp_threshold:
+        description: 'For re-enrich threshold mode: ICP score cutoff (e.g. 50)'
+        required: false
+        type: string
+        default: '50'
 
 jobs:
   # Single job for non-batch tasks
@@ -99,6 +106,25 @@ jobs:
         elif [ "$TASK" = "Validate Setup Only" ]; then
           echo "Validating setup..."
           python validate_setup.py
+          
+        elif [ "$TASK" = "Re-enrich Low Confidence Companies" ]; then
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "200" ]; then
+            echo "Re-enriching low confidence companies (limit: $LIMIT)..."
+            python enrich_companies.py --re-enrich-low-confidence --limit $LIMIT
+          else
+            echo "Re-enriching all low confidence companies..."
+            python enrich_companies.py --re-enrich-low-confidence
+          fi
+          
+        elif [ "$TASK" = "Re-enrich Companies Below Threshold" ]; then
+          THRESHOLD="${{ github.event.inputs.icp_threshold || '50' }}"
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "200" ]; then
+            echo "Re-enriching companies with ICP <= $THRESHOLD (limit: $LIMIT)..."
+            python enrich_companies.py --re-enrich-threshold $THRESHOLD --limit $LIMIT
+          else
+            echo "Re-enriching all companies with ICP <= $THRESHOLD..."
+            python enrich_companies.py --re-enrich-threshold $THRESHOLD
+          fi
         fi
     
     - name: Upload enrichment log
