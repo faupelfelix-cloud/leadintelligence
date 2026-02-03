@@ -16,6 +16,7 @@ on:
           - all
           - leads-only
           - triggers-only
+          - campaign-only
       limit:
         description: 'Max records per table (leave empty for no limit)'
         required: false
@@ -29,6 +30,7 @@ on:
 jobs:
   validate-outreach:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     
     steps:
     - name: Checkout code
@@ -71,6 +73,12 @@ jobs:
         LEAD_ID="${{ github.event.inputs.lead_id }}"
         TRIGGER_ID="${{ github.event.inputs.trigger_id }}"
         
+        echo "======================================================"
+        echo "OUTREACH VALIDATION"
+        echo "Mode: $MODE"
+        echo "Limit: ${LIMIT:-no limit}"
+        echo "======================================================"
+        
         if [ -n "$LEAD_ID" ]; then
           echo "Validating specific lead: $LEAD_ID"
           python validate_outreach.py --lead-id "$LEAD_ID"
@@ -91,8 +99,15 @@ jobs:
           else
             python validate_outreach.py --triggers-only
           fi
+        elif [ "$MODE" == "campaign-only" ]; then
+          echo "Validating campaign leads only..."
+          if [ -n "$LIMIT" ]; then
+            python validate_outreach.py --campaign-only --limit $LIMIT
+          else
+            python validate_outreach.py --campaign-only
+          fi
         else
-          echo "Validating all pending outreach messages (unvalidated only)..."
+          echo "Validating all pending outreach messages..."
           if [ -n "$LIMIT" ]; then
             python validate_outreach.py --all --limit $LIMIT
           else
