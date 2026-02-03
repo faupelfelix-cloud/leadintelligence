@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
+from confidence_utils import calculate_confidence_score
 
 # Configure logging
 logging.basicConfig(
@@ -754,6 +755,7 @@ Only return valid JSON, no other text."""
         if data_confidence:
             try:
                 update_fields['Data Confidence'] = json.dumps(data_confidence)
+                update_fields['Data Confidence Score'] = calculate_confidence_score(data_confidence)
             except:
                 pass
         
