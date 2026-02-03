@@ -987,7 +987,7 @@ COMPANY BACKGROUND (verified):
 
 Generate 4 messages:
 
-1. EMAIL (60-80 words max):
+1. EMAIL (100-120 words):
 Subject: [Short, professional]
 Body: Start with their world, connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name]"
@@ -999,7 +999,7 @@ Why you'd like to connect — reference their role or work
 After connection. Relevant to their role, brief value mention
 Sign: "Best regards, [Your Name]"
 
-4. LINKEDIN INMAIL (60-80 words max):
+4. LINKEDIN INMAIL (100-120 words):
 Subject: [Natural, not salesy]
 Body: Observation about their work, why meeting makes sense for THEM
 Sign: "Best regards, [Your Name]"
@@ -1318,7 +1318,7 @@ COMPANY BACKGROUND (verified):
 GENERATE FOUR MESSAGES:
 ═══════════════════════════════════════════════════════════
 
-MESSAGE 1: EMAIL (60-80 words max — HARD LIMIT)
+MESSAGE 1: EMAIL (100-120 words — HARD LIMIT)
 Subject: [Natural, short, references context or conference]
 Body: Start with THEIR world (their work, stage, or challenge), connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name]"
@@ -1329,7 +1329,7 @@ No signature
 
 MESSAGE 3: LINKEDIN INMAIL 
 Subject: [Natural, not salesy]
-Body: 60-80 words max. Open with observation about their work, connect to why Rezon is relevant for THEM specifically
+Body: 100-120 words. Open with observation about their work, connect to why Rezon is relevant for THEM specifically
 Sign: "Best, [Your Name]"
 
 MESSAGE 4: LINKEDIN SHORT (under 180 chars)
@@ -1748,7 +1748,8 @@ Return ONLY valid JSON:
     def refresh_outreach(self, limit: Optional[int] = None, 
                          campaign_type: str = "general",
                          campaign_name: str = None,
-                         dry_run: bool = False):
+                         dry_run: bool = False,
+                         offset: int = 0):
         """
         Regenerate outreach messages for Campaign Leads that already have messages.
         
@@ -1760,8 +1761,14 @@ Return ONLY valid JSON:
             campaign_type: Default campaign type
             campaign_name: Optional — only refresh leads from this campaign
             dry_run: If True, report what would be refreshed without making changes
+            offset: Skip first N leads (for parallel batch processing)
         """
         leads = self.get_campaign_leads_for_refresh(campaign_name)
+        
+        # Apply offset first, then limit (same pattern as process_enrichment)
+        if offset > 0:
+            leads = leads[offset:]
+            logger.info(f"Skipping first {offset} leads (offset)")
         
         if limit:
             leads = leads[:limit]
@@ -2236,7 +2243,8 @@ Examples:
             limit=args.limit,
             campaign_type=args.campaign_type,
             campaign_name=args.campaign_name,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            offset=args.offset
         )
     elif args.enrich_only:
         processor.process_enrichment(args.limit, args.offset)
