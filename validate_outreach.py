@@ -335,10 +335,15 @@ class OutreachValidator:
     # VALIDATION LOGIC
     # =========================================================================
     
-    def validate_outreach_messages(self, messages: Dict[str, str], context: Dict) -> Dict:
+    def validate_outreach_messages(self, messages: Dict[str, str], context: Dict, source_type: str = "general") -> Dict:
         """
         Validate outreach messages against current market information.
         Uses AI with web search to verify claims.
+        
+        Args:
+            messages: Dict of message type -> content
+            context: Lead/company context
+            source_type: "general", "trigger", or "campaign" - affects validation rules
         
         Returns:
             {
@@ -395,10 +400,45 @@ TRIGGER INFORMATION:
 - Sources: {context.get('sources', '')}
 """
         
+        # Add campaign context if available
+        campaign_context = context.get('campaign_context', {})
+        if source_type == "campaign" or campaign_context:
+            campaign_type = campaign_context.get('campaign_type', context.get('campaign_type', ''))
+            campaign_name = campaign_context.get('campaign_name', context.get('campaign_name', ''))
+            context_str += f"""
+CAMPAIGN INFORMATION:
+- Campaign Type: {campaign_type or 'Campaign Lead List'}
+- Campaign Name: {campaign_name or 'N/A'}
+- Source: Campaign Lead Upload
+"""
+        
+        # Build do-not-flag rules based on source type
+        do_not_flag_rules = """
+DO NOT flag as issues:
+- Lead name/title/company (already verified)
+- General statements that don't make specific claims
+- Standard CDMO value propositions"""
+        
+        if source_type == "campaign":
+            do_not_flag_rules += """
+- Conference/event/webinar attendance or registration (this lead was added from an event attendee list - their attendance IS CONFIRMED and should be treated as fact)
+- References to meeting at a conference, event, roadshow, or webinar (this is the reason for outreach and is verified by the campaign lead list)
+- Mentions of shared event attendance, "looking forward to connecting at [event]", "saw you registered for", "great meeting you at", etc. - ALL of these are verified facts for campaign leads
+- Campaign-specific outreach angles related to event context (these are intentional and correct)"""
+        
+        do_not_flag_rules += """
+
+ONLY flag as issues:
+- Specific factual claims in the message that are wrong or outdated
+- Recent developments that contradict the message
+- Inappropriate tone or content"""
+        
         validation_prompt = f"""You are a quality assurance specialist reviewing B2B outreach messages for a biologics CDMO.
 
 CONTEXT (from our database - this info is already verified):
 {context_str}
+
+{"IMPORTANT - CAMPAIGN LEAD CONTEXT: This lead comes from a campaign lead list (e.g. conference attendee list, webinar registration, roadshow invite list). Any references to the lead attending, being registered for, or being associated with an event/conference/webinar should be treated as VERIFIED FACTS. Do NOT penalize the score for event attendance claims - they are confirmed by the campaign source data." if source_type == "campaign" else ""}
 
 OUTREACH MESSAGES TO VALIDATE:
 {all_messages}
@@ -412,15 +452,7 @@ VALIDATION TASKS - Focus on the MESSAGE CONTENT:
 4. **Tone & Appropriateness**: Is the message appropriate for the recipient's seniority and industry?
 5. **Factual Accuracy**: If the message mentions specific facts (e.g., "$50M Series B", "Phase 2 trial", "recent partnership with X"), verify these are correct.
 
-DO NOT flag as issues:
-- Lead name/title/company (already verified)
-- General statements that don't make specific claims
-- Standard CDMO value propositions
-
-ONLY flag as issues:
-- Specific factual claims in the message that are wrong or outdated
-- Recent developments that contradict the message
-- Inappropriate tone or content
+{do_not_flag_rules}
 
 RATING SCALE:
 - HIGH (90-100): Message content is accurate, safe to send as-is
@@ -714,7 +746,7 @@ Return ONLY JSON, no other text."""
                     
                     # Build context from campaign lead fields
                     context = {
-                        'lead_name': campaign['fields'].get('Name', ''),
+                        'lead_name': campaign['fields'].get('Lead Name', campaign['fields'].get('Name', '')),
                         'lead_title': campaign['fields'].get('Title', ''),
                         'lead_email': campaign['fields'].get('Email', ''),
                         'lead_linkedin': campaign['fields'].get('LinkedIn URL', ''),
@@ -725,10 +757,14 @@ Return ONLY JSON, no other text."""
                             'pipeline_stage': campaign['fields'].get('Pipeline Stage', ''),
                             'therapeutic_areas': campaign['fields'].get('Therapeutic Areas', ''),
                             'intelligence_notes': campaign['fields'].get('Notes', '')
+                        },
+                        'campaign_context': {
+                            'campaign_type': campaign['fields'].get('Campaign Type', ''),
+                            'campaign_name': campaign['fields'].get('Campaign Name', campaign['fields'].get('Conference', ''))
                         }
                     }
                     
-                    validation = self.validate_outreach_messages(messages, context)
+                    validation = self.validate_outreach_messages(messages, context, source_type="campaign")
                     self.update_campaign_lead_validation(campaign['id'], validation)
                     
                     # Track stats
@@ -811,6 +847,89 @@ Return ONLY JSON, no other text."""
         except Exception as e:
             logger.error(f"Error validating trigger {trigger_id}: {e}")
             return None
+    
+    def validate_campaign_leads_only(self, limit: int = None):
+        """Validate only campaign leads outreach messages"""
+        if not self.campaign_leads_table:
+            logger.error("Campaign Leads table not available")
+            return
+        
+        logger.info("="*70)
+        logger.info("CAMPAIGN LEADS OUTREACH VALIDATION")
+        logger.info("="*70)
+        
+        stats = {
+            'processed': 0,
+            'high': 0,
+            'medium': 0,
+            'low': 0,
+            'critical': 0,
+            'errors': 0
+        }
+        
+        campaign_leads = self.get_campaign_leads_needing_validation(limit=limit)
+        total = len(campaign_leads)
+        
+        logger.info(f"Found {total} campaign leads needing validation")
+        
+        for idx, campaign in enumerate(campaign_leads, 1):
+            lead_name = campaign['fields'].get('Lead Name', campaign['fields'].get('Name', 'Unknown'))
+            company_name = campaign['fields'].get('Company', 'Unknown')
+            logger.info(f"\n[{idx}/{total}] {lead_name} @ {company_name}")
+            
+            try:
+                messages = {
+                    field: campaign['fields'].get(field, '') 
+                    for field in self.CAMPAIGN_OUTREACH_FIELDS
+                }
+                
+                # Build context from campaign lead fields
+                context = {
+                    'lead_name': lead_name,
+                    'lead_title': campaign['fields'].get('Title', ''),
+                    'lead_email': campaign['fields'].get('Email', ''),
+                    'lead_linkedin': campaign['fields'].get('LinkedIn URL', ''),
+                    'company_name': company_name,
+                    'company_data': {
+                        'location': campaign['fields'].get('Location', ''),
+                        'funding': campaign['fields'].get('Funding', ''),
+                        'pipeline_stage': campaign['fields'].get('Pipeline Stage', ''),
+                        'therapeutic_areas': campaign['fields'].get('Therapeutic Areas', ''),
+                        'intelligence_notes': campaign['fields'].get('Notes', campaign['fields'].get('Processing Notes', ''))
+                    },
+                    'campaign_context': {
+                        'campaign_type': campaign['fields'].get('Campaign Type', ''),
+                        'campaign_name': campaign['fields'].get('Campaign Name', campaign['fields'].get('Conference', ''))
+                    }
+                }
+                
+                validation = self.validate_outreach_messages(messages, context, source_type="campaign")
+                self.update_campaign_lead_validation(campaign['id'], validation)
+                
+                stats['processed'] += 1
+                rating = validation.get('validity_rating', 'LOW').lower()
+                stats[rating] = stats.get(rating, 0) + 1
+                
+                logger.info(f"  ✓ Rating: {validation.get('validity_rating')} ({validation.get('validity_score')}/100)")
+                
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"  ✗ Error: {e}")
+                stats['errors'] += 1
+        
+        # Summary
+        logger.info("\n" + "="*70)
+        logger.info("CAMPAIGN VALIDATION COMPLETE")
+        logger.info("="*70)
+        logger.info(f"Total processed: {stats['processed']}")
+        logger.info(f"  HIGH: {stats['high']}")
+        logger.info(f"  MEDIUM: {stats['medium']}")
+        logger.info(f"  LOW: {stats['low']}")
+        logger.info(f"  CRITICAL: {stats['critical']}")
+        logger.info(f"Errors: {stats['errors']}")
+        
+        return stats
 
 
 def main():
@@ -818,9 +937,10 @@ def main():
     parser.add_argument('--all', action='store_true', help='Validate all pending messages')
     parser.add_argument('--leads-only', action='store_true', help='Only validate leads')
     parser.add_argument('--triggers-only', action='store_true', help='Only validate triggers')
+    parser.add_argument('--campaign-only', action='store_true', help='Only validate campaign leads')
     parser.add_argument('--lead-id', type=str, help='Validate specific lead by ID')
     parser.add_argument('--trigger-id', type=str, help='Validate specific trigger by ID')
-    parser.add_argument('--limit', type=int, default=20, help='Max records per table (default: 20)')
+    parser.add_argument('--limit', type=int, default=None, help='Max records per table (default: no limit)')
     parser.add_argument('--config', type=str, default='config.yaml', help='Config file path')
     
     args = parser.parse_args()
@@ -838,6 +958,10 @@ def main():
         if result:
             print(f"\nRating: {result['validity_rating']} ({result['validity_score']}/100)")
             print(f"Recommendation: {result.get('recommendation', 'N/A')}")
+    
+    elif args.campaign_only:
+        # Only validate campaign leads
+        validator.validate_campaign_leads_only(limit=args.limit)
     
     else:
         validator.validate_all_pending(limit_per_table=args.limit)
