@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import anthropic
 from pyairtable import Api
+from company_profile_utils import build_outreach_philosophy
 
 # Configure logging
 logging.basicConfig(
@@ -230,18 +231,20 @@ DO NOT overpromise. Be authentic and conversational.
 {profile_section}
 {activity_section}
 
-YOUR MISSION: Create outreach messages that naturally reference the TRIGGER EVENT as the reason for reaching out.
+{build_outreach_philosophy()}
 
-CRITICAL RULES FOR AUTHENTIC TRIGGER-BASED OUTREACH:
+YOUR MISSION: Create outreach that uses the TRIGGER EVENT as the reason for reaching out, then answers "Why should I take this meeting?" from THEIR perspective.
 
-1. **Lead with the trigger** - The event/news is WHY you're reaching out
-2. **Show you know them** - Reference their background naturally, don't explain their situation to them
-3. **Be human, not AI-polished** - Natural language, no excessive formatting
-4. **Keep it about THEM** - Their news, their achievement, their conference
-5. **No bullet point lists** - Weave key points into natural sentences
-6. **Conversational tone** - Like you're writing to a colleague you admire
-7. **No ** for emphasis** - Clean, simple formatting only
-8. **Soft CTA** - Suggest a conversation, don't push a meeting
+CRITICAL RULES FOR TRIGGER-BASED OUTREACH:
+
+1. Lead with the trigger — the event/news is WHY you're reaching out
+2. THEN connect ONE Rezon strength to THEIR specific situation arising from the trigger
+3. Show you know them — reference their background naturally, don't explain their situation to them
+4. Include ONE proof point woven naturally (Sandoz qualification, biosimilar track record, FDA/EMA)
+5. Be human, not AI-polished — natural language, no excessive formatting
+6. No bullet point lists — weave key points into natural sentences
+7. Soft CTA — suggest a conversation, don't push a meeting
+8. No ** for emphasis — clean, simple formatting only
 
 TRIGGER-SPECIFIC GUIDANCE:
 """
@@ -333,17 +336,17 @@ MESSAGE 3: LINKEDIN MESSAGE (After Connection - 250-350 chars)
 
 EXAMPLES OF GOOD VS BAD:
 
-BAD (Generic):
+BAD (Generic CDMO pitch):
 "I noticed you're attending BioEurope. As a CDMO, we'd love to meet to discuss your manufacturing needs."
 
-GOOD (Specific & Human):
-"Saw you're speaking on ADC development at BioEurope - your work on site-specific conjugation is fascinating. Would love to grab a coffee at the event if you have 15 mins."
+GOOD (Their situation + Rezon's specific relevance):
+"Saw you're speaking on ADC development at BioEurope — your work on site-specific conjugation at commercial scale is exactly where our Sandoz-qualified facilities add value. Would love to grab a coffee at the event."
 
-BAD (Salesy):
+BAD (Features list after trigger):
 "Congratulations on the Series C! Rezon Bio offers cost-effective manufacturing solutions that could help you scale."
 
-GOOD (Genuine):
-"Great news on the Series C - exciting to see Tubulis advancing the ADC platform. As you think about scale-up, happy to share what we've learned working with similar programs."
+GOOD (Trigger + why meeting helps THEM):
+"Great news on the Series C — exciting to see Tubulis advancing the ADC platform. As you plan the next manufacturing stage, our EU-based setup can cut costs significantly vs US CDMOs while staying EMA/FDA-aligned. Happy to share specifics."
 
 Return as JSON:
 {{
