@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple, Any
 import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
+from confidence_utils import calculate_confidence_score
 
 # Configure logging FIRST
 logging.basicConfig(
@@ -567,6 +568,7 @@ Return ONLY JSON."""
             if data_confidence:
                 try:
                     update_fields['Data Confidence'] = json.dumps(data_confidence)
+                    update_fields['Data Confidence Score'] = calculate_confidence_score(data_confidence)
                 except:
                     pass
             
@@ -823,6 +825,7 @@ Return ONLY JSON."""
             if lead_data_confidence:
                 try:
                     update_fields['Data Confidence'] = json.dumps(lead_data_confidence)
+                    update_fields['Data Confidence Score'] = calculate_confidence_score(lead_data_confidence)
                 except:
                     pass
             
