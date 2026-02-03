@@ -47,6 +47,7 @@ import yaml
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
+from company_profile_utils import load_company_profile, build_value_proposition, build_outreach_philosophy
 
 # Configure logging
 logging.basicConfig(
@@ -159,6 +160,10 @@ class HousekeepingManager:
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
         )
+        
+        # Load company profile for outreach personalization
+        self.base = api.base(base_id)
+        self.company_profile = load_company_profile(self.base)
         
         self.rate_limit_delay = self.config.get('web_search', {}).get('rate_limit_delay', 2)
         
@@ -595,6 +600,7 @@ class HousekeepingManager:
         """Sanitize and validate multi-select values against allowed options.
         
         Strips curly quotes and other AI artifacts, then filters to valid options only.
+        Unrecognized values fall back to 'Other' if it's in the valid list.
         """
         if not values:
             return []
@@ -602,16 +608,23 @@ class HousekeepingManager:
             values = [values]
         
         validated = []
+        has_other_fallback = 'Other' in valid_list
+        
         for v in values:
             clean = sanitize_string(v)
             if clean in valid_list:
                 validated.append(clean)
             else:
                 # Try case-insensitive match
+                matched = False
                 for valid in valid_list:
                     if clean.lower() == valid.lower():
-                        validated.append(valid)  # Use the canonical casing
+                        validated.append(valid)
+                        matched = True
                         break
+                # Fall back to 'Other' if no match
+                if not matched and has_other_fallback and 'Other' not in validated:
+                    validated.append('Other')
         return validated
     
     def _validate_single_select(self, value: str, valid_list: List[str]) -> Optional[str]:
@@ -914,12 +927,14 @@ Return ONLY valid JSON:
         # Get company context
         company_name = ''
         company_context = {}
+        company_fields_raw = {}  # Raw Airtable fields for value proposition matching
         company_ids = fields.get('Company', [])
         if company_ids:
             try:
                 company = self.companies_table.get(company_ids[0])
                 cf = company['fields']
                 company_name = cf.get('Company Name', '')
+                company_fields_raw = cf  # Keep raw fields for value prop builder
                 company_context = {
                     'technology_platform': ', '.join(cf.get('Technology Platform', [])),
                     'therapeutic_areas': ', '.join(cf.get('Therapeutic Areas', [])),
@@ -958,33 +973,27 @@ Return ONLY valid JSON:
         if current_version > 0:
             version_note = "Previous versions scored below quality threshold — make this one better."
         
-        prompt = f"""Generate professional outreach messages for this lead.
+        # Build value proposition matched to this prospect
+        value_prop = build_value_proposition(self.company_profile, company_fields_raw, title)
+        outreach_rules = build_outreach_philosophy()
+        
+        prompt = f"""Generate personalized outreach messages for this lead.
 
 LEAD: {lead_name}
 {context_str}
 Lead ICP: {lead_icp}/100
 
-YOUR COMPANY (Rezon Bio):
-European CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs).
+{value_prop}
 
 This is VERSION {new_version} of the outreach. {version_note}
 
-═══════════════════════════════════════════════════════════
-CRITICAL RULES:
-═══════════════════════════════════════════════════════════
-- NEVER mention specific funding amounts or rounds
-- NEVER claim specific pipeline stages unless listed above
-- NEVER mention CDMO partnerships or manufacturing decisions
-- Pick ONE relevant detail max
-- Sound human, not AI
-- NO bullet lists, NO **bold**
-- ALL messages must be SHORT
+{outreach_rules}
 
 Generate FOUR messages:
 
 1. EMAIL (60-80 words max)
 Subject: [Natural, short]
-Body: Natural opener, one detail, soft CTA
+Body: Start with THEIR world, connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
 2. LINKEDIN CONNECTION (under 200 chars)
@@ -996,7 +1005,7 @@ Sign: "Best regards, [Your Name], Rezon Bio BD"
 
 4. LINKEDIN INMAIL (60-80 words max)
 Subject: [Not salesy]
-Body: Observation about their work, why connecting makes sense
+Body: Observation about their work, why meeting makes sense for THEM
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
 Return ONLY valid JSON:
@@ -1084,6 +1093,7 @@ Return ONLY valid JSON:
         lead_name = ''
         company_name = ''
         title = ''
+        company_fields_raw = {}
         lead_ids = fields.get('Lead', [])
         if lead_ids:
             try:
@@ -1092,8 +1102,9 @@ Return ONLY valid JSON:
                 title = lead['fields'].get('Title', '')
                 company_ids = lead['fields'].get('Company', [])
                 if company_ids:
-                    company = self.companies_table.get(company_ids[0])
-                    company_name = company['fields'].get('Company Name', '')
+                    company_rec = self.companies_table.get(company_ids[0])
+                    company_fields_raw = company_rec['fields']
+                    company_name = company_fields_raw.get('Company Name', '')
             except:
                 pass
         
@@ -1103,6 +1114,9 @@ Return ONLY valid JSON:
         version_note = ""
         if current_version > 0:
             version_note = "Previous versions scored below quality threshold — make this one better."
+        
+        # Build value proposition matched to this prospect
+        value_prop = build_value_proposition(self.company_profile, company_fields_raw, title)
         
         prompt = f"""Generate trigger-based outreach for this lead.
 
@@ -1115,14 +1129,16 @@ TRIGGER DATE: {trigger_date}
 
 This is VERSION {new_version}. {version_note}
 
-YOUR COMPANY (Rezon Bio): European CDMO for mammalian cell culture (mAbs, bispecifics, ADCs).
+{value_prop}
 
-RULES:
+OUTREACH APPROACH:
+- The TRIGGER is the reason for reaching out — reference it naturally
+- Connect the trigger to why Rezon Bio is relevant for THEM specifically
+- Answer "why should I take this meeting?" from their perspective
+- One proof point max, woven in naturally
+- Sound like a knowledgeable peer, not a salesperson
 - NEVER mention specific funding amounts unless in trigger details above
-- Reference the trigger naturally — don't over-explain
 - 60-80 words max per message
-- ONE relevant detail max
-- Sound human, not AI
 
 Generate:
 1. EMAIL (60-80 words, Subject + Body, sign as [Your Name], Rezon Bio BD)
