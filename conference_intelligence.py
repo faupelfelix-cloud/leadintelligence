@@ -15,9 +15,9 @@ from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import (load_company_profile, build_value_proposition, 
+from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention)
+                                   suppressed_to_do_not_mention, classify_persona)
 
 # Configure logging FIRST (before using logger)
 logging.basicConfig(
@@ -75,6 +75,7 @@ class ConferenceIntelligence:
         
         # Load Company Profile for value-driven outreach
         self.company_profile = load_company_profile(self.base)
+        self.persona_messaging = load_persona_messaging(self.base)
         
         logger.info("ConferenceIntelligence initialized successfully")
     
@@ -996,6 +997,10 @@ Return ONLY JSON."""
                 'Intelligence Notes': f"Discovered via Conference Intelligence\nSource: {source}"
             }
             
+            # Classify persona from title
+            if title:
+                lead_data['Persona Category'] = classify_persona(title)
+            
             record = self.leads_table.create(lead_data)
             lead_id = record['id']
             logger.info(f"    ✓ Created lead: {name}")
@@ -1282,7 +1287,7 @@ Return ONLY JSON."""
             pass
         
         # Build value proposition and philosophy
-        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate professional outreach messages for this lead.
@@ -1488,7 +1493,7 @@ Return ONLY JSON."""
             pass
         
         # Build value proposition for conference context
-        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, 'Conference')
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, 'Conference', persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate conference-specific outreach messages.
