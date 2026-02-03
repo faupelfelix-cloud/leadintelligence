@@ -4,12 +4,120 @@ Company Profile utilities for outreach generation.
 
 Loads the Company Profile table from Airtable and builds context-aware
 value propositions matched to each prospect's situation.
+
+Also provides confidence-based field filtering so that low-confidence
+data never reaches outreach prompts.
 """
 
+import json
 import logging
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+# === CONFIDENCE FIELD MAPPING ===
+# Maps Data Confidence JSON keys → Airtable field names that should be suppressed
+# when confidence is low/unverified
+CONFIDENCE_FIELD_MAP = {
+    # Company Data Confidence keys → Company table fields
+    'funding': ['Funding Stage', 'Total Funding', 'Last Funding Round'],
+    'pipeline': ['Pipeline Stage', 'Lead Programs', 'Pipeline Details'],
+    'therapeutic_areas': ['Therapeutic Areas'],
+    'cdmo_partnerships': ['CDMO Partner', 'Manufacturing Partner', 'Manufacturing Status'],
+    'employees': ['Employee Count', 'Company Size'],
+    'revenue': ['Revenue', 'Annual Revenue'],
+}
+
+# Lead Data Confidence keys → Lead table fields
+LEAD_CONFIDENCE_FIELD_MAP = {
+    'email': ['Email'],
+    'title': ['Title'],
+    'linkedin': ['LinkedIn URL'],
+}
+
+
+def filter_by_confidence(fields: Dict, min_confidence: str = 'medium') -> Tuple[Dict, List[str]]:
+    """Filter Airtable record fields based on Data Confidence scores.
+    
+    Returns a COPY of the fields dict with low-confidence fields cleared,
+    plus a list of suppressed field names (for DO NOT MENTION warnings).
+    
+    Args:
+        fields: Raw Airtable record fields
+        min_confidence: Minimum confidence level to keep ('high' or 'medium')
+        
+    Returns:
+        (filtered_fields, suppressed_topics) tuple
+    """
+    # Parse confidence JSON
+    raw_conf = fields.get('Data Confidence', '')
+    if not raw_conf:
+        return fields, []  # No confidence data → pass through as-is
+    
+    try:
+        confidence = json.loads(raw_conf)
+    except (json.JSONDecodeError, TypeError):
+        return fields, []
+    
+    # Determine which confidence levels are acceptable
+    if min_confidence == 'high':
+        acceptable = {'high'}
+    else:
+        acceptable = {'high', 'medium'}
+    
+    # Build filtered copy
+    filtered = dict(fields)
+    suppressed = []
+    
+    # Check company-level confidence fields
+    for conf_key, field_names in CONFIDENCE_FIELD_MAP.items():
+        conf_level = confidence.get(conf_key, '')
+        if conf_level and conf_level not in acceptable:
+            for field_name in field_names:
+                if field_name in filtered and filtered[field_name]:
+                    filtered[field_name] = '' if isinstance(filtered[field_name], str) else []
+            suppressed.append(conf_key)
+    
+    # Check lead-level confidence fields
+    for conf_key, field_names in LEAD_CONFIDENCE_FIELD_MAP.items():
+        conf_level = confidence.get(conf_key, '')
+        if conf_level and conf_level not in acceptable:
+            for field_name in field_names:
+                if field_name in filtered and filtered[field_name]:
+                    filtered[field_name] = ''
+            suppressed.append(conf_key)
+    
+    if suppressed:
+        logger.debug(f"  Confidence filter suppressed: {', '.join(suppressed)}")
+    
+    return filtered, suppressed
+
+
+def suppressed_to_do_not_mention(suppressed: List[str]) -> str:
+    """Convert suppressed confidence keys to human-readable DO NOT MENTION text.
+    
+    Args:
+        suppressed: List of confidence keys that were filtered out
+        
+    Returns:
+        Warning string for the prompt, or empty string if nothing suppressed
+    """
+    if not suppressed:
+        return ''
+    
+    topic_map = {
+        'funding': 'specific funding rounds or amounts',
+        'pipeline': 'specific pipeline stages (Phase 1/2/3)',
+        'therapeutic_areas': 'specific therapeutic areas',
+        'cdmo_partnerships': 'CDMO partnerships or manufacturing partners',
+        'employees': 'specific employee counts or company size',
+        'revenue': 'specific revenue figures',
+        'email': 'email address (unverified)',
+        'title': 'job title (unverified)',
+    }
+    
+    topics = [topic_map.get(s, s) for s in suppressed]
+    return "\n⚠️ DO NOT MENTION (low confidence / unverified): " + ", ".join(topics)
 
 
 def load_company_profile(base) -> Dict:
@@ -61,23 +169,27 @@ Target: Mid-size biotechs needing cost-efficient manufacturing support.
     
     company_fields = company_fields or {}
     
+    # === CONFIDENCE FILTERING ===
+    # Strip low-confidence fields so value matching doesn't use unreliable data
+    safe_fields, suppressed = filter_by_confidence(company_fields)
+    
     # === CORE POSITIONING ===
     positioning = profile.get('Positioning Statement', 
         'EU/US cost leader for New Biological Entities (NBEs)')
     
     # === DETERMINE PROSPECT SEGMENT ===
     # Use pipeline stage and funding to pick the right value angle
-    segment_pitch = _match_segment_pitch(profile, company_fields)
+    segment_pitch = _match_segment_pitch(profile, safe_fields)
     
     # === PERSONA-SPECIFIC ANGLE ===
     persona_angle = _match_persona_angle(profile, lead_title)
     
     # === SELECT PROOF POINTS ===
     # Pick 2-3 most relevant proof points based on prospect context
-    proof_points = _select_proof_points(profile, company_fields)
+    proof_points = _select_proof_points(profile, safe_fields)
     
     # === PAIN POINTS THEY LIKELY HAVE ===
-    pain_points = _match_pain_points(profile, company_fields)
+    pain_points = _match_pain_points(profile, safe_fields)
     
     # === KEY MESSAGING THEMES ===
     messaging = profile.get('Key Messaging Themes', '')
@@ -92,7 +204,7 @@ Target: Mid-size biotechs needing cost-efficient manufacturing support.
     # === DIFFERENTIATION ===
     diff = profile.get('Differentiation vs Competitors', '')
     # Pick the most relevant competitive angle based on prospect geography
-    diff_angle = _match_differentiation(diff, company_fields)
+    diff_angle = _match_differentiation(diff, safe_fields)
     
     # === WEAKNESSES / HONESTY ===
     weaknesses = profile.get('Key Weaknesses', '')
