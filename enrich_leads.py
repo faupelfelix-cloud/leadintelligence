@@ -850,7 +850,7 @@ CRITICAL RULES:
 
 Generate FOUR messages:
 
-MESSAGE 1: EMAIL (60-80 words max — HARD LIMIT)
+MESSAGE 1: EMAIL (100-120 words — HARD LIMIT)
 Subject: [Natural, short]
 Body: Start with THEIR world, connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
@@ -862,7 +862,7 @@ MESSAGE 3: LINKEDIN SHORT (under 300 chars)
 After connection accepted. Conversational.
 Sign: "Best regards, [Your Name], Rezon Bio BD"
 
-MESSAGE 4: LINKEDIN INMAIL (60-80 words max — HARD LIMIT)
+MESSAGE 4: LINKEDIN INMAIL (100-120 words — HARD LIMIT)
 Subject: [Natural, not salesy]
 Body: Observation about their work, why connecting makes sense
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
