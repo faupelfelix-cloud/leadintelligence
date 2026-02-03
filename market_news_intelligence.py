@@ -1948,7 +1948,7 @@ Company ICP Score: {company_icp}/90
 
 Generate 4 messages:
 
-1. EMAIL (60-80 words max):
+1. EMAIL (100-120 words):
 Subject: [Natural subject line]
 - Start with THEIR world, connect ONE Rezon strength to their situation
 - Soft CTA
@@ -1962,7 +1962,7 @@ Subject: [Natural subject line]
 - Conversational, reference their background
 - End: "Best regards, [Your Name]"
 
-4. LINKEDIN INMAIL (60-80 words max):
+4. LINKEDIN INMAIL (100-120 words):
 Subject: [Natural subject]
 - Observation about their work, why connecting makes sense
 - NO bullet lists
@@ -2220,7 +2220,7 @@ Lead with the trigger event — this news is WHY you're reaching out NOW.
 
 Generate 3 SHORT messages that reference this specific news:
 
-1. EMAIL (60-80 words max):
+1. EMAIL (100-120 words):
 Subject: [Reference the news naturally]
 - Open by referencing the news
 - Connect ONE Rezon strength to their situation
