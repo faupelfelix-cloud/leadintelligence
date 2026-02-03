@@ -47,7 +47,9 @@ import yaml
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import load_company_profile, build_value_proposition, build_outreach_philosophy
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Configure logging
 logging.basicConfig(
@@ -928,31 +930,27 @@ Return ONLY valid JSON:
         company_name = ''
         company_context = {}
         company_fields_raw = {}  # Raw Airtable fields for value proposition matching
+        suppressed = []  # Low-confidence fields to warn about
         company_ids = fields.get('Company', [])
         if company_ids:
             try:
                 company = self.companies_table.get(company_ids[0])
                 cf = company['fields']
                 company_name = cf.get('Company Name', '')
-                company_fields_raw = cf  # Keep raw fields for value prop builder
-                company_context = {
-                    'technology_platform': ', '.join(cf.get('Technology Platform', [])),
-                    'therapeutic_areas': ', '.join(cf.get('Therapeutic Areas', [])),
-                    'pipeline_stage': ', '.join(cf.get('Pipeline Stage', [])),
-                }
                 
-                # Filter by confidence — omit low/unverified data from prompt
-                raw_conf = cf.get('Data Confidence', '')
-                if raw_conf:
-                    try:
-                        conf = json.loads(raw_conf)
-                        if conf.get('therapeutic_areas') in ('low', 'unverified'):
-                            company_context['therapeutic_areas'] = ''
-                        if conf.get('pipeline') in ('low', 'unverified'):
-                            company_context['pipeline_stage'] = ''
-                    except:
-                        pass
+                # Apply confidence filtering — strip low-confidence fields
+                safe_cf, suppressed = filter_by_confidence(cf)
+                company_fields_raw = safe_cf  # Filtered fields for value prop builder
+                
+                company_context = {
+                    'technology_platform': ', '.join(safe_cf.get('Technology Platform', []) if isinstance(safe_cf.get('Technology Platform', []), list) else [safe_cf.get('Technology Platform', '')]),
+                    'therapeutic_areas': ', '.join(safe_cf.get('Therapeutic Areas', []) if isinstance(safe_cf.get('Therapeutic Areas', []), list) else [safe_cf.get('Therapeutic Areas', '')]),
+                    'pipeline_stage': ', '.join(safe_cf.get('Pipeline Stage', []) if isinstance(safe_cf.get('Pipeline Stage', []), list) else [safe_cf.get('Pipeline Stage', '')]),
+                }
+                # Clean up empty strings from filtering
+                company_context = {k: v.strip(', ') for k, v in company_context.items()}
             except:
+                suppressed = []
                 pass
         
         if not company_name:
@@ -967,7 +965,12 @@ Return ONLY valid JSON:
         if company_context.get('therapeutic_areas'):
             context_parts.append(f"Focus: {company_context['therapeutic_areas']}")
         
+        # Add DO NOT MENTION warnings for suppressed fields
+        dnm_text = suppressed_to_do_not_mention(suppressed)
+        
         context_str = "\n".join(context_parts)
+        if dnm_text:
+            context_str += '\n' + dnm_text
         
         version_note = ""
         if current_version > 0:
@@ -1103,7 +1106,8 @@ Return ONLY valid JSON:
                 company_ids = lead['fields'].get('Company', [])
                 if company_ids:
                     company_rec = self.companies_table.get(company_ids[0])
-                    company_fields_raw = company_rec['fields']
+                    # Apply confidence filtering
+                    company_fields_raw, _ = filter_by_confidence(company_rec['fields'])
                     company_name = company_fields_raw.get('Company Name', '')
             except:
                 pass
