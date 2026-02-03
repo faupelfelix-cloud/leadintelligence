@@ -36,9 +36,9 @@ import anthropic
 from pyairtable import Api
 from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import (load_company_profile, build_value_proposition, 
+from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention)
+                                   suppressed_to_do_not_mention, classify_persona)
 
 # Import fuzzy matching utilities
 try:
@@ -348,6 +348,7 @@ class MarketNewsIntelligence:
         
         # Company Profile
         self.company_profile = load_company_profile(self.base)
+        self.persona_messaging = load_persona_messaging(self.base)
         
         # API client
         self.anthropic_client = anthropic.Anthropic(
@@ -1288,6 +1289,10 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
                 'Intelligence Notes': f"Found via news: {article.get('headline', '')[:150]}"
             }
             
+            # Classify persona from title
+            if lead_title:
+                lead_data['Persona Category'] = classify_persona(lead_title)
+            
             # Add optional fields if they have values
             if linkedin_url:
                 lead_data['LinkedIn URL'] = linkedin_url
@@ -1307,6 +1312,8 @@ Be thorough - search LinkedIn, company website, and news. Return ONLY JSON."""
                         'Company': [company_id],
                         'Title': lead_title
                     }
+                    if lead_title:
+                        minimal_data['Persona Category'] = classify_persona(lead_title)
                     lead_record = self.leads_table.create(minimal_data)
                     lead_id = lead_record['id']
                     logger.info(f"  ✓ Created lead with minimal fields: {lead_name}")
@@ -1929,7 +1936,7 @@ Return ONLY JSON."""
             pass
         
         # Build value proposition and philosophy
-        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate professional outreach messages for this lead.
@@ -2197,7 +2204,7 @@ Return ONLY JSON."""
             pass
         
         # Build value proposition and philosophy
-        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate trigger-specific outreach messages referencing recent news.
