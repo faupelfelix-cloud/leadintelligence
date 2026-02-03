@@ -31,6 +31,13 @@ PERSONA_BUCKETS = {
             'ceo', 'chief executive', 'founder', 'co-founder', 'cofounder',
             'owner', 'managing director', 'president', 'chairman', 'chairwoman',
             'general manager', 'coo', 'chief operating',
+            'chief strategy', 'chief corporate', 'chief technology', 'cto',
+            'chief people', 'chief human', 'chro', 'chief legal', 'clo',
+            'chief patient', 'chief information', 'cio', 'cido',
+            'board director', 'evp', 'executive vice president',
+            'svp', 'senior vice president',
+            'head of development', 'head of technical', 'head of pipeline',
+            'vp,', 'vp ', 'vice president',
         ],
         'description': 'Top decision-makers who care about strategic fit, risk, and business impact',
     },
@@ -38,16 +45,30 @@ PERSONA_BUCKETS = {
         'keywords': [
             'cmc', 'manufacturing', 'production', 'operations', 'process development',
             'process science', 'upstream', 'downstream', 'bioprocess', 'tech transfer',
-            'technical operations', 'plant manager', 'site director', 'fill finish',
-            'drug substance', 'drug product', 'ppq', 'validation', 'gmp',
+            'technology transfer', 'technical operations', 'plant manager', 'site director',
+            'fill finish', 'drug substance', 'drug product', 'ppq', 'validation', 'gmp',
+            'plant director', 'site leader', 'plant network', 'site head',
+            'sterile', 'aseptic', 'formulation', 'lyophilization',
+            'maintenance', 'engineering manager', 'industrial engineer',
+            'continuous improvement', 'lean', 'six sigma',
+            'packaging', 'device assembly', 'msat',
+            'process expert', 'process and procedures', 'process engineer',
+            'technical director', 'technical manager', 'technical design',
+            'technical development', 'technology excellence', 'inspection readiness',
+            'chemist', 'api ', 'active pharmaceutical',
+            'dsp development', 'usp ', 'small molecule',
+            'biologics manufacturing', 'biomanufacturing',
+            'engineer', 'engineering', 'materials science',
         ],
         'description': 'Hands-on leaders who run manufacturing and care about execution capability',
     },
     'Quality / Regulatory': {
         'keywords': [
-            'quality', 'qa ', 'qc ', 'quality assurance', 'quality control',
+            'quality', 'qa', 'qc', 'quality assurance', 'quality control',
             'regulatory', 'compliance', 'pharmacovigilance', 'gxp',
             'qualified person', 'regulatory affairs', 'cqo', 'chief quality',
+            'inspection', 'auditor', 'audit', 'gmp compliance',
+            'deviation', 'capa', 'batch release',
         ],
         'description': 'Guardians of compliance who need to trust your regulatory track record',
     },
@@ -56,6 +77,12 @@ PERSONA_BUCKETS = {
             'supply chain', 'procurement', 'sourcing', 'purchasing', 'vendor',
             'supplier', 'logistics', 'supply management', 'category manager',
             'strategic sourcing', 'cpo', 'chief procurement',
+            'external supply', 'supply planning', 'supply base',
+            'supply security', 'supply strategy', 'supply network',
+            'category strategy', 'category director', 'category lead',
+            'global category', 'sr. category', 'commodity',
+            'warehousing', 'warehouse', 'partnership & external',
+            'co-development',
         ],
         'description': 'Cost and reliability focused — they evaluate CDMOs on price, capacity, and risk',
     },
@@ -64,6 +91,12 @@ PERSONA_BUCKETS = {
             'business development', 'commercial', 'marketing', 'sales',
             'partnerships', 'alliance', 'licensing', 'market access',
             'chief commercial', 'cbo', 'chief business',
+            'account manager', 'account director', 'account executive',
+            'account specialist', 'key account', 'national account',
+            'global account', 'territory manager', 'territory representative',
+            'brand manager', 'communications', 'corporate communications',
+            'product launch', 'new product', 'launch lead',
+            'strategy office', 'enterprise strategy',
         ],
         'description': 'Growth-focused leaders thinking about partnerships and market strategy',
     },
@@ -72,6 +105,18 @@ PERSONA_BUCKETS = {
             'r&d', 'research', 'scientific', 'scientist', 'cso', 'chief scientific',
             'discovery', 'preclinical', 'biology', 'pharmacology', 'head of research',
             'clinical development', 'cmo', 'chief medical', 'medical director',
+            'analytical', 'bioanalytical', 'analytical sciences',
+            'immunology', 'virology', 'oncology', 'biotherapeutics',
+            'protein', 'antibody', 'biologics development', 'biologic',
+            'biosimilar', 'flow cytometry', 'bioinformatics', 'data science',
+            'pharm sci', 'pharm.', 'pharmaceutical science',
+            'allosteric', 'modulation', 'drug development',
+            'early phase', 'toxicolog', 'study director',
+            'cell line', 'cell culture', 'assay',
+            'medical affairs', 'medical advisor', 'heor',
+            'health economics', 'value & evidence',
+            'clinical trial', 'clinical supply', 'clinical systems',
+            'post-doc', 'postdoc', 'fellow',
         ],
         'description': 'Science-driven leaders — less focused on cost, more on capability and innovation',
     },
@@ -79,6 +124,8 @@ PERSONA_BUCKETS = {
         'keywords': [
             'program', 'project', 'portfolio', 'pmo',
             'project manager', 'program director', 'program lead',
+            'implementation manager', 'planning manager',
+            'end-to-end', 'product planning',
         ],
         'description': 'Execution-focused — timelines, deliverables, hands-on coordination',
     },
@@ -86,6 +133,8 @@ PERSONA_BUCKETS = {
         'keywords': [
             'cfo', 'chief financial', 'finance', 'investor relations',
             'controller', 'treasurer', 'financial planning',
+            'accounting', 'accounts payable', 'accounts receivable',
+            'investment', 'venture', 'analyst', 'financial analyst',
         ],
         'description': 'Numbers-driven — cost efficiency, capital deployment, ROI',
     },
@@ -328,14 +377,24 @@ def classify_persona(lead_title: str) -> str:
     
     title_lower = lead_title.lower().strip()
     
+    # Skip unverified titles — these are enrichment artifacts, not real titles
+    unverified_markers = [
+        'unable to verify', 'not verified', 'cannot verify', 'could not verify',
+        'no verification', 'no record found', 'not found', 'no match found',
+        'no evidence found', 'not confirmed', 'no current employee',
+        'position not verified', 'does not appear', 'does not exist',
+    ]
+    if any(marker in title_lower for marker in unverified_markers):
+        return 'General'
+    
     # Score each bucket by how many keywords match
     scores = {}
     for bucket_name, bucket_info in PERSONA_BUCKETS.items():
         score = 0
         for keyword in bucket_info['keywords']:
             # Use word boundary matching for short keywords to avoid false positives
-            if len(keyword) <= 3:
-                # Short keywords like 'qa', 'qc', 'cfo' — need boundary
+            if len(keyword) <= 4:
+                # Short keywords like 'qa', 'qc', 'cfo', 'cto', 'api' — need boundary
                 if re.search(r'\b' + re.escape(keyword) + r'\b', title_lower):
                     score += 2  # Exact short match is strong signal
             elif keyword in title_lower:
@@ -841,67 +900,3 @@ def _match_differentiation(diff_text: str, company_fields: Dict) -> str:
         return "VS. Premium EU CDMOs (Lonza, Samsung, Fujifilm): Same pharma-grade quality, but lower half of cost benchmarks. Faster decision-making, more personalized service, no 'small fish in a big pond' problem."
     
     return "KEY DIFFERENTIATOR: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Quality is uncompromised; it's the overhead and pricing model that's different."
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
