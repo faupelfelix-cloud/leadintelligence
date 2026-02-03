@@ -47,9 +47,9 @@ import yaml
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
-from company_profile_utils import (load_company_profile, build_value_proposition, 
+from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention)
+                                   suppressed_to_do_not_mention, classify_persona)
 
 # Configure logging
 logging.basicConfig(
@@ -166,6 +166,7 @@ class HousekeepingManager:
         # Load company profile for outreach personalization
         self.base = api.base(base_id)
         self.company_profile = load_company_profile(self.base)
+        self.persona_messaging = load_persona_messaging(self.base)
         
         self.rate_limit_delay = self.config.get('web_search', {}).get('rate_limit_delay', 2)
         
@@ -977,7 +978,7 @@ Return ONLY valid JSON:
             version_note = "Previous versions scored below quality threshold — make this one better."
         
         # Build value proposition matched to this prospect
-        value_prop = build_value_proposition(self.company_profile, company_fields_raw, title)
+        value_prop = build_value_proposition(self.company_profile, company_fields_raw, title, persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate personalized outreach messages for this lead.
@@ -1120,7 +1121,7 @@ Return ONLY valid JSON:
             version_note = "Previous versions scored below quality threshold — make this one better."
         
         # Build value proposition matched to this prospect
-        value_prop = build_value_proposition(self.company_profile, company_fields_raw, title)
+        value_prop = build_value_proposition(self.company_profile, company_fields_raw, title, persona_messaging=self.persona_messaging)
         
         prompt = f"""Generate trigger-based outreach for this lead.
 
