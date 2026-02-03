@@ -15,6 +15,9 @@ from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Configure logging
 logging.basicConfig(
@@ -55,6 +58,9 @@ class LeadEnricher:
         except Exception as e:
             logger.warning(f"ICP Scorer not available: {str(e)}")
             self.icp_scorer = None
+        
+        # Load Company Profile for value-driven outreach
+        self.company_profile = load_company_profile(self.base)
         
         logger.info("LeadEnricher initialized successfully")
     
@@ -798,6 +804,25 @@ Only return the JSON, no other text."""
                                   lead_icp: int, company_icp: int = None) -> Dict:
         """Generate general introduction outreach messages during enrichment"""
         
+        # Fetch and filter company data for this lead
+        company_fields = {}
+        do_not_mention_text = ""
+        try:
+            # Look up company by name to get enriched fields
+            from pyairtable.formulas import match
+            formula = match({"Company Name": company_name})
+            records = self.companies_table.all(formula=formula)
+            if records:
+                raw_fields = records[0]['fields']
+                company_fields, suppressed = filter_by_confidence(raw_fields)
+                do_not_mention_text = suppressed_to_do_not_mention(suppressed)
+        except:
+            pass
+        
+        # Build value proposition and philosophy
+        value_prop = build_value_proposition(self.company_profile, company_fields, title)
+        outreach_rules = build_outreach_philosophy()
+        
         prompt = f"""Generate professional outreach messages for this lead.
 
 LEAD INFORMATION:
@@ -806,15 +831,16 @@ Title: {title}
 Company: {company_name}
 Lead ICP Score: {lead_icp}/100
 Company ICP Score: {company_icp if company_icp else 'Unknown'}/90
+{do_not_mention_text}
 
-YOUR COMPANY (Rezon Bio):
-European CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs).
-Target: Mid-size biotechs in Phase 2/3 or commercial.
+{value_prop}
+
+{outreach_rules}
 
 ═══════════════════════════════════════════════════════════
 CRITICAL RULES:
 ═══════════════════════════════════════════════════════════
-- NEVER mention specific funding amounts or rounds
+- NEVER mention specific funding amounts or rounds (unless verified)
 - NEVER claim specific pipeline stages unless you're certain
 - NEVER mention CDMO partnerships or manufacturing decisions
 - Pick ONE relevant detail max — do not stack facts
@@ -826,7 +852,7 @@ Generate FOUR messages:
 
 MESSAGE 1: EMAIL (60-80 words max — HARD LIMIT)
 Subject: [Natural, short]
-Body: Natural opener, one detail about their role/company, soft CTA
+Body: Start with THEIR world, connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
 MESSAGE 2: LINKEDIN CONNECTION (under 200 chars)
