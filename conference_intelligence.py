@@ -15,6 +15,9 @@ from typing import Dict, List, Optional, Any
 import anthropic
 from pyairtable import Api
 from confidence_utils import calculate_confidence_score
+from company_profile_utils import (load_company_profile, build_value_proposition, 
+                                   build_outreach_philosophy, filter_by_confidence,
+                                   suppressed_to_do_not_mention)
 
 # Configure logging FIRST (before using logger)
 logging.basicConfig(
@@ -69,6 +72,9 @@ class ConferenceIntelligence:
         except Exception as e:
             logger.warning(f"Could not load ICP scorer: {str(e)}. Using fallback scoring.")
             self.icp_scorer = None
+        
+        # Load Company Profile for value-driven outreach
+        self.company_profile = load_company_profile(self.base)
         
         logger.info("ConferenceIntelligence initialized successfully")
     
@@ -756,10 +762,19 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
+            # Helper function to sanitize AI output (curly quotes, smart quotes)
+            def sanitize_val(s):
+                if not isinstance(s, str):
+                    return s
+                for ch in '\u201c\u201d\u2018\u2019\u201a\u201b\u201f\u300c\u300d\u300e\u300f\u301d\u301e\uff02\uff07':
+                    s = s.replace(ch, '')
+                return s.strip('"\'').strip()
+            
             # Helper function to validate single select
             def validate_single(value, valid_options, default='Unknown'):
                 if not value:
                     return default
+                value = sanitize_val(value)
                 if value in valid_options:
                     return value
                 for opt in valid_options:
@@ -1244,39 +1259,63 @@ Return ONLY JSON."""
                                 company_name: str) -> bool:
         """Generate generic outreach messages for a lead"""
         
+        # Fetch and filter company data
+        company_fields = {}
+        company_context_text = f"Company: {company_name}"
+        do_not_mention_text = ""
+        try:
+            lead_record = self.leads_table.get(lead_id)
+            company_ids = lead_record['fields'].get('Company', [])
+            if company_ids:
+                raw_fields = self.companies_table.get(company_ids[0])['fields']
+                company_fields, suppressed = filter_by_confidence(raw_fields)
+                parts = [f"Company: {company_name}"]
+                tech = company_fields.get('Technology Platform', [])
+                if tech:
+                    parts.append(f"Technology: {', '.join(tech) if isinstance(tech, list) else tech}")
+                ta = company_fields.get('Therapeutic Areas', [])
+                if ta:
+                    parts.append(f"Focus: {', '.join(ta) if isinstance(ta, list) else ta}")
+                company_context_text = '\n'.join(parts)
+                do_not_mention_text = suppressed_to_do_not_mention(suppressed)
+        except:
+            pass
+        
+        # Build value proposition and philosophy
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title)
+        outreach_rules = build_outreach_philosophy()
+        
         prompt = f"""Generate professional outreach messages for this lead.
 
 LEAD:
 Name: {lead_name}
 Title: {lead_title}
-Company: {company_name}
+{company_context_text}
+{do_not_mention_text}
 
-YOUR COMPANY: European biologics CDMO specializing in mammalian cell culture manufacturing (mAbs, bispecifics, ADCs)
+{value_prop}
+
+{outreach_rules}
 
 Generate 4 messages for initial outreach:
 
-1. EMAIL (80-100 words):
-Subject: [Professional subject line]
-- Brief intro
-- Value proposition relevant to their role
+1. EMAIL (60-80 words max):
+Subject: [Natural, short]
+- Start with THEIR world, connect ONE Rezon strength to their situation
 - Soft CTA
+- Sign: "Best regards, [Your Name], Rezon Bio Business Development"
+
+2. LINKEDIN CONNECTION (under 200 chars):
+- Brief, friendly. No signature.
+
+3. LINKEDIN SHORT MESSAGE (under 300 chars):
+- After connection. Conversational.
 - Sign: "Best regards, [Your Name]"
 
-2. LINKEDIN CONNECTION (150-180 chars):
-- Why you'd like to connect
-- Professional tone
-
-3. LINKEDIN SHORT MESSAGE (200-300 chars):
-- Relevant to their role
-- Brief value mention
-- Sign: "Best regards, [Your Name]"
-
-4. LINKEDIN INMAIL (150-200 words):
-Subject: [InMail subject]
-- More detailed intro
-- Clear value proposition
-- CTA
-- Sign: "Best regards, [Your Name]"
+4. LINKEDIN INMAIL (60-80 words max):
+Subject: [Natural, not salesy]
+- Observation about their work, why connecting makes sense
+- Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
 Return ONLY valid JSON:
 {{
@@ -1429,26 +1468,28 @@ Return ONLY JSON."""
                                       session_topic: str = None) -> Optional[Dict]:
         """Generate conference-specific outreach messages"""
         
-        # Get lead info
+        # Get lead info and filtered company data
         lead_name = "there"
         lead_title = ""
         company_name = ""
+        company_fields = {}
+        do_not_mention_text = ""
         try:
             lead_record = self.leads_table.get(lead_id)
             lead_name = lead_record['fields'].get('Lead Name', 'there')
             lead_title = lead_record['fields'].get('Title', '')
             company_ids = lead_record['fields'].get('Company', [])
             if company_ids:
-                company_record = self.companies_table.get(company_ids[0])
-                company_name = company_record['fields'].get('Company Name', '')
+                raw_fields = self.companies_table.get(company_ids[0])['fields']
+                company_fields, suppressed = filter_by_confidence(raw_fields)
+                company_name = company_fields.get('Company Name', '')
+                do_not_mention_text = suppressed_to_do_not_mention(suppressed)
         except:
             pass
         
-        # Build context
-        if session_topic:
-            context = f"Speaking at {conference_name} on '{session_topic}'"
-        else:
-            context = f"{role_at_conference} at {conference_name}"
+        # Build value proposition for conference context
+        value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, 'Conference')
+        outreach_rules = build_outreach_philosophy()
         
         prompt = f"""Generate conference-specific outreach messages.
 
@@ -1461,23 +1502,29 @@ LEAD:
 Name: {lead_name}
 Title: {lead_title}
 Company: {company_name}
+{do_not_mention_text}
 
-YOUR COMPANY: European biologics CDMO specializing in mammalian cell culture manufacturing
+{value_prop}
+
+{outreach_rules}
+
+The conference is the REASON for reaching out — use it as a natural hook.
 
 Generate 3 SHORT messages to connect before/at the conference:
 
-1. EMAIL (80-100 words):
+1. EMAIL (60-80 words max):
 Subject: [Reference conference naturally]
 - Mention you'll also be at the conference
 - Reference their session/role if applicable
+- Connect ONE Rezon strength to their situation
 - Propose meeting for coffee/chat
-- Sign: "Best regards, [Your Name]"
+- Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
-2. LINKEDIN CONNECTION (150-180 chars):
+2. LINKEDIN CONNECTION (under 200 chars):
 - Reference the conference
 - Express interest in connecting there
 
-3. LINKEDIN SHORT MESSAGE (200-300 chars):
+3. LINKEDIN SHORT MESSAGE (under 300 chars):
 - Reference their presence at conference
 - Mention interest in their work/session
 - Propose meeting up
