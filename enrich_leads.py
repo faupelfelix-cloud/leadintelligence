@@ -661,35 +661,39 @@ class LeadEnricher:
 
 {context}
 
+═══════════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════════
+1. TITLE: {"The title '" + current_title + "' is from our records. KEEP this title unless web search clearly shows a DIFFERENT current title at the SAME company." if current_title else "Find the current title."}
+2. LINKEDIN: Only return a LinkedIn URL if you find the EXACT person (matching name AND company). Do NOT guess or construct URLs from name patterns.
+3. EMAIL: Search thoroughly but return null if not found — do NOT fabricate email addresses.
+4. Only return information about THIS specific person at THIS company. If multiple people share the name, match by company.
+
 Find and verify the following information:
 
 CONTACT INFORMATION:
-- Professional email address - CRITICAL: Put maximum effort into finding this
+- Professional email address — CRITICAL: Maximum effort to find this
   * Search company website thoroughly: team page, about us, contact page, leadership bios
   * Check press releases and news articles (often quote emails)
   * Look for conference speaker lists (usually include contact info)
   * Search for published papers, patents, posters (author contact emails)
   * Check LinkedIn "Contact Info" section (sometimes public)
   * Search "[name] [company] email" directly
-  * Look for university/previous company emails if recently moved
-  * If not found: Research company email pattern from OTHER employees (firstname.lastname@company.com, flastname@company.com, etc.) and suggest pattern
-  * Try tools like RocketReach, Hunter.io results if they appear in search
-- Current job title (verify it's current, not outdated)
-- LinkedIn profile URL (ensure it's the correct person)
-- X (Twitter) profile URL (if they have one - look for verified account or bio mentioning their company/role)
+  * If not found: Research company email pattern from OTHER employees and suggest pattern
+- Current job title (see rule 1 — keep existing title unless clearly changed)
+- LinkedIn profile URL (see rule 2 — must be exact match)
+- X (Twitter) profile URL (if verified account mentioning their company/role)
 
 EMAIL FINDING PRIORITY:
 This is the MOST IMPORTANT field. Spend extra search effort finding the email.
 - Search at least 5-10 different sources for email
 - Try multiple search queries with variations
 - If you find company email pattern, suggest it with "Pattern Suggested" confidence
-- Example patterns: firstname.lastname@company.com, f.lastname@company.com, firstnamel@company.com
 
 IMPORTANT GUIDELINES:
-- For email: Only provide if found on official sources. If not found, suggest likely pattern based on company email format if you can identify it, but mark as "needs verification"
-- For title: Make sure it's their CURRENT title, not a previous role
-- For LinkedIn: Verify it's the right person by cross-referencing company and location
-- For X profile: Format as full URL (https://x.com/username or https://twitter.com/username). Only include if confident it's the right person
+- For email: Only provide if found on official sources. If not found, suggest likely pattern but mark as "needs verification"
+- For title: Keep existing title unless web clearly contradicts (see rule 1)
+- For LinkedIn: Verify it's the right person by cross-referencing company and location (see rule 2)
 - Prioritize recent, official sources (last 12 months)
 
 Return your findings in this exact JSON format:
@@ -697,7 +701,9 @@ Return your findings in this exact JSON format:
   "email": "email@company.com or null",
   "email_confidence": "High/Medium/Low/Pattern Suggested",
   "email_source": "source description or null",
-  "title": "Current Job Title or null",
+  "title": "{current_title or 'Current Job Title or null'}",
+  "title_changed": false,
+  "title_change_reason": "null or reason why title was updated",
   "title_confidence": "High/Medium/Low",
   "title_source": "source description or null",
   "linkedin_url": "LinkedIn URL or null",
@@ -709,7 +715,13 @@ Return your findings in this exact JSON format:
   "recent_activity": "Any recent news, posts, or mentions (optional)",
   "last_updated": "Date of most recent information found",
   "sources": ["url1", "url2"],
-  "overall_confidence": "High/Medium/Low"
+  "overall_confidence": "High/Medium/Low",
+  "data_confidence": {{
+      "email": "high|medium|low|unverified",
+      "title": "high|medium|low|unverified",
+      "linkedin": "high|medium|low|unverified",
+      "identity_match": "high|medium|low"
+  }}
 }}
 
 Only return the JSON, no other text."""
@@ -795,76 +807,47 @@ Lead ICP Score: {lead_icp}/100
 Company ICP Score: {company_icp if company_icp else 'Unknown'}/90
 
 YOUR COMPANY (Rezon Bio):
-- European CDMO specializing in mammalian cell culture
-- Focus: mAbs, bispecifics, ADCs
-- Target: Mid-size biotechs in Phase 2/3 or commercial
-- Positioning: Cost-efficient European quality vs. Western CDMOs
-- Strengths: Biosimilar track record, Sandoz-qualified, agile mid-size partner
-
-Generate FOUR brief, natural outreach messages:
+European CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs).
+Target: Mid-size biotechs in Phase 2/3 or commercial.
 
 ═══════════════════════════════════════════════════════════
-MESSAGE 1: EMAIL (120-150 words)
+CRITICAL RULES:
 ═══════════════════════════════════════════════════════════
-Subject: [Natural subject line]
+- NEVER mention specific funding amounts or rounds
+- NEVER claim specific pipeline stages unless you're certain
+- NEVER mention CDMO partnerships or manufacturing decisions
+- Pick ONE relevant detail max — do not stack facts
+- Sound like a human, not an AI that scraped their profile
+- NO bullet lists — NO **bold** markup
+- Keep ALL messages SHORT — less is more
 
-Requirements:
-- Natural, conversational opener
-- Reference their role/company naturally
-- Suggest why Rezon might be relevant (no bullet lists)
-- Soft CTA - question or suggestion to connect
-- Sign as: "Best regards, [Your Name], Rezon Bio Business Development"
+Generate FOUR messages:
 
-═══════════════════════════════════════════════════════════
-MESSAGE 2: LINKEDIN CONNECTION REQUEST (180-200 chars)
-═══════════════════════════════════════════════════════════
-Requirements:
-- Very brief, friendly
-- Reference their role or company
-- No signature needed
+MESSAGE 1: EMAIL (60-80 words max — HARD LIMIT)
+Subject: [Natural, short]
+Body: Natural opener, one detail about their role/company, soft CTA
+Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
-═══════════════════════════════════════════════════════════
-MESSAGE 3: LINKEDIN SHORT MESSAGE (300-400 chars)
-═══════════════════════════════════════════════════════════
-For after connection accepted.
+MESSAGE 2: LINKEDIN CONNECTION (under 200 chars)
+Brief, friendly, reference role or company. No signature.
 
-Requirements:
-- Conversational opener
-- Reference their background or role
-- Suggest why connecting makes sense
-- End with: "Best regards, [Your Name], Rezon Bio BD"
+MESSAGE 3: LINKEDIN SHORT (under 300 chars)
+After connection accepted. Conversational.
+Sign: "Best regards, [Your Name], Rezon Bio BD"
 
-═══════════════════════════════════════════════════════════
-MESSAGE 4: LINKEDIN INMAIL (250-350 words)
-═══════════════════════════════════════════════════════════
+MESSAGE 4: LINKEDIN INMAIL (60-80 words max — HARD LIMIT)
 Subject: [Natural, not salesy]
-
-Requirements:
-- Open with observation about their work/company
-- Share relevant perspective (not sales pitch)
-- Sound like industry peer conversation
-- Weave in why Rezon might be relevant
-- Natural next step suggestion
-- NO bullet lists - paragraphs only
-- Sign as: "Best regards, [Your Name], Rezon Bio Business Development"
-
-CRITICAL STYLE RULES:
-- Natural, human language (slightly imperfect is fine)
-- NO bullet lists anywhere
-- NO ** for emphasis
-- Show knowledge, don't tell them their situation
-- About THEM, not about us
-- Conversational, not corporate
-- Use [Your Name] as placeholder
+Body: Observation about their work, why connecting makes sense
+Sign: "Best regards, [Your Name], Rezon Bio Business Development"
 
 Return in this JSON format:
 {{
   "email_subject": "Subject here",
-  "email_body": "Body with signature using [Your Name] placeholder",
-  "linkedin_connection": "Connection request (under 200 chars, no signature)",
-  "linkedin_short": "Short message ending with 'Best regards, [Your Name], Rezon Bio BD'",
+  "email_body": "Body with signature",
+  "linkedin_connection": "Under 200 chars, no signature",
+  "linkedin_short": "Under 300 chars with signature",
   "linkedin_inmail_subject": "InMail subject",
-  "linkedin_inmail_body": "InMail body ending with 'Best regards, [Your Name], Rezon Bio Business Development'"
+  "linkedin_inmail_body": "Body with signature"
 }}
 
 Only return valid JSON."""
@@ -1002,6 +985,26 @@ Only return valid JSON."""
             new_notes = '\n'.join(notes_parts)
             enrichment_header = f"\n\n---\nEnrichment on {datetime.now().strftime('%Y-%m-%d')}:\n"
             update_fields['Intelligence Notes'] = enrichment_header + new_notes
+        
+        # Store data confidence for downstream use (outreach filtering, housekeeping)
+        data_confidence = enriched_data.get('data_confidence', {})
+        if data_confidence:
+            try:
+                # Add confidence warnings to notes
+                low_conf = [f"⚠ {k}: {v}" for k, v in data_confidence.items() if v in ('low', 'unverified')]
+                if low_conf and 'Intelligence Notes' in update_fields:
+                    update_fields['Intelligence Notes'] += "\n\nData Confidence Warnings:\n" + "\n".join(low_conf)
+                update_fields['Data Confidence'] = json.dumps(data_confidence)
+            except:
+                pass
+        
+        # Handle title changes — log if title was changed by enrichment
+        if enriched_data.get('title_changed'):
+            reason = enriched_data.get('title_change_reason', 'Unknown reason')
+            old_title = enriched_data.get('_original_title', 'Unknown')
+            logger.info(f"  ⚠ Title changed: '{old_title}' → '{enriched_data.get('title')}' (Reason: {reason})")
+            if 'Intelligence Notes' in update_fields:
+                update_fields['Intelligence Notes'] += f"\n\n⚠ Title changed from '{old_title}': {reason}"
         
         # Calculate Lead ICP Score
         # Get company ICP if lead is linked to company
