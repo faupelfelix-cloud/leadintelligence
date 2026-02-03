@@ -1,0 +1,100 @@
+name: Housekeeping
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to run'
+        required: true
+        type: choice
+        options:
+          - 'Screen Only (dry-run report)'
+          - 'Full Housekeeping'
+          - 'Companies Only'
+          - 'Leads Only'
+          - 'Outreach Only'
+      confidence_threshold:
+        description: 'Confidence threshold (default: 85, range 0-100)'
+        required: false
+        type: string
+        default: '85'
+      limit:
+        description: 'Limit records per category (default: unlimited)'
+        required: false
+        type: string
+        default: ''
+  
+  # Weekly schedule — runs every Sunday at 3am UTC
+  schedule:
+    - cron: '0 3 * * 0'
+
+jobs:
+  housekeeping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Create config from secrets
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python setup.py
+    
+    - name: Run housekeeping
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+        AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        MODE="${{ github.event.inputs.mode || 'Full Housekeeping' }}"
+        THRESHOLD="${{ github.event.inputs.confidence_threshold || '85' }}"
+        LIMIT="${{ github.event.inputs.limit }}"
+        
+        # Build command
+        CMD="python housekeeping.py --confidence-threshold $THRESHOLD"
+        
+        if [ -n "$LIMIT" ]; then
+          CMD="$CMD --limit $LIMIT"
+        fi
+        
+        if [ "$MODE" = "Screen Only (dry-run report)" ]; then
+          CMD="$CMD --screen-only"
+        elif [ "$MODE" = "Companies Only" ]; then
+          CMD="$CMD --companies-only"
+        elif [ "$MODE" = "Leads Only" ]; then
+          CMD="$CMD --leads-only"
+        elif [ "$MODE" = "Outreach Only" ]; then
+          CMD="$CMD --outreach-only"
+        fi
+        # "Full Housekeeping" uses no extra flags
+        
+        echo "============================================================"
+        echo "HOUSEKEEPING: $MODE"
+        echo "Threshold: $THRESHOLD | Limit: ${LIMIT:-unlimited}"
+        echo "Command: $CMD"
+        echo "============================================================"
+        
+        eval $CMD
+    
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: housekeeping-log-${{ github.run_id }}
+        path: housekeeping.log
+        retention-days: 30
