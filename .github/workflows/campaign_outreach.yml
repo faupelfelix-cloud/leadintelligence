@@ -13,9 +13,11 @@ on:
           - 'Bulk Process (2000+ leads)'
           - 'Enrich Only (skip outreach)'
           - 'Outreach Only (already enriched)'
+          - 'Refresh Outreach (regenerate existing)'
+          - 'Bulk Refresh Outreach (parallel)'
           - 'Test (10 leads)'
       batch_size:
-        description: 'Batch size for bulk mode'
+        description: 'Leads per parallel batch (bulk/refresh modes)'
         required: false
         default: '50'
         type: choice
@@ -23,6 +25,7 @@ on:
           - '25'
           - '50'
           - '100'
+          - '200'
       campaign_type:
         description: 'Campaign type for outreach'
         required: false
@@ -34,93 +37,95 @@ on:
           - 'Roadshow'
           - 'Webinar'
       limit:
-        description: 'Max leads (standard mode only, leave empty for all)'
+        description: 'Max leads (standard/refresh mode, leave empty for all)'
         required: false
         type: number
+      campaign_name:
+        description: 'Filter refresh to specific campaign (optional)'
+        required: false
+        type: string
 
 jobs:
-  process:
+  # ============================================================
+  # Single-job tasks (standard, test, enrich, outreach, refresh)
+  # ============================================================
+  process-single:
+    if: >-
+      github.event.inputs.task != 'Bulk Process (2000+ leads)' &&
+      github.event.inputs.task != 'Bulk Refresh Outreach (parallel)'
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
-        run: |
-          pip install pyairtable anthropic pyyaml
-      
+        run: pip install pyairtable anthropic pyyaml
+
       - name: Create config from secrets
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          python setup.py
-      
+        run: python setup.py
+
       - name: Process campaign leads
         run: |
           TASK="${{ github.event.inputs.task }}"
           BATCH_SIZE="${{ github.event.inputs.batch_size || '50' }}"
           CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type || 'general' }}"
           LIMIT="${{ github.event.inputs.limit }}"
-          
+
           echo "======================================================"
           echo "CAMPAIGN LEADS PROCESSOR"
-          echo "======================================================"
           echo "Task: $TASK"
-          echo "Batch size: $BATCH_SIZE"
-          echo "Campaign type: $CAMPAIGN_TYPE"
-          echo "Limit: ${LIMIT:-none}"
           echo "======================================================"
-          
+
           if [ "$TASK" = "Test (10 leads)" ]; then
-            echo "Running test with 10 leads..."
             python process_campaign_leads.py --limit 10 --campaign-type "$CAMPAIGN_TYPE"
-          
+
           elif [ "$TASK" = "Standard Process (small batches)" ]; then
             if [ -n "$LIMIT" ]; then
-              echo "Processing up to $LIMIT leads (standard mode)..."
               python process_campaign_leads.py --limit "$LIMIT" --campaign-type "$CAMPAIGN_TYPE"
             else
-              echo "Processing all leads (standard mode)..."
               python process_campaign_leads.py --campaign-type "$CAMPAIGN_TYPE"
             fi
-          
-          elif [ "$TASK" = "Bulk Process (2000+ leads)" ]; then
-            echo "Running bulk processing (batch size: $BATCH_SIZE)..."
-            python process_campaign_leads.py --bulk --batch-size "$BATCH_SIZE" --campaign-type "$CAMPAIGN_TYPE"
-          
+
           elif [ "$TASK" = "Enrich Only (skip outreach)" ]; then
-            echo "Running enrichment only (skipping outreach)..."
             python process_campaign_leads.py --bulk --batch-size "$BATCH_SIZE" --skip-outreach
-          
+
           elif [ "$TASK" = "Outreach Only (already enriched)" ]; then
-            echo "Generating outreach for already enriched leads..."
             python process_campaign_leads.py --outreach-only --campaign-type "$CAMPAIGN_TYPE"
-          
+
+          elif [ "$TASK" = "Refresh Outreach (regenerate existing)" ]; then
+            echo "Refreshing existing outreach with updated prompts..."
+            CAMPAIGN_NAME="${{ github.event.inputs.campaign_name }}"
+            CMD="python process_campaign_leads.py --refresh-outreach --campaign-type $CAMPAIGN_TYPE"
+            if [ -n "$CAMPAIGN_NAME" ]; then
+              CMD="$CMD --campaign-name \"$CAMPAIGN_NAME\""
+            fi
+            if [ -n "$LIMIT" ]; then
+              CMD="$CMD --limit $LIMIT"
+            fi
+            eval $CMD
+
           elif [ "$TASK" = "Process All (auto-detect mode)" ]; then
-            echo "Auto-detecting processing mode..."
-            
             python count_campaign_leads.py > /tmp/lead_count.txt 2>/dev/null || echo "0" > /tmp/lead_count.txt
             LEAD_COUNT=$(cat /tmp/lead_count.txt)
             echo "Leads to process: $LEAD_COUNT"
-            
             if [ "$LEAD_COUNT" -gt 100 ]; then
-              echo "Auto-selecting BULK mode (>100 leads)"
               python process_campaign_leads.py --bulk --batch-size "$BATCH_SIZE" --campaign-type "$CAMPAIGN_TYPE"
             else
-              echo "Auto-selecting STANDARD mode (<=100 leads)"
               python process_campaign_leads.py --campaign-type "$CAMPAIGN_TYPE"
             fi
           fi
-      
+
       - name: Upload log
         uses: actions/upload-artifact@v4
         if: always()
@@ -128,7 +133,7 @@ jobs:
           name: campaign-leads-log-${{ github.run_id }}
           path: campaign_leads.log
           retention-days: 30
-      
+
       - name: Summary
         if: always()
         run: |
@@ -137,13 +142,121 @@ jobs:
           echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Task | ${{ github.event.inputs.task }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Batch Size | ${{ github.event.inputs.batch_size || '50' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Campaign Type | ${{ github.event.inputs.campaign_type || 'general' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
           if [ -f campaign_leads.log ]; then
             echo "### Results" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -E "(COMPLETE|processed|excluded|enriched|Total|Breakdown|•|Progress)" campaign_leads.log | tail -30 >> $GITHUB_STEP_SUMMARY || tail -30 campaign_leads.log >> $GITHUB_STEP_SUMMARY
+            grep -E "(COMPLETE|REFRESH|processed|refreshed|Refresh|Total|errors)" campaign_leads.log | tail -30 >> $GITHUB_STEP_SUMMARY || tail -30 campaign_leads.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
+
+  # ============================================================
+  # Bulk processing — parallel jobs via matrix
+  # ============================================================
+  process-bulk:
+    if: github.event.inputs.task == 'Bulk Process (2000+ leads)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyairtable anthropic pyyaml
+
+      - name: Create config from secrets
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python setup.py
+
+      - name: Process batch
+        run: |
+          BATCH="${{ matrix.batch }}"
+          BATCH_SIZE="${{ github.event.inputs.batch_size || '50' }}"
+          CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type || 'general' }}"
+          OFFSET=$((BATCH * BATCH_SIZE))
+
+          echo "======================================================"
+          echo "BATCH $BATCH: Processing leads $OFFSET to $((OFFSET + BATCH_SIZE - 1))"
+          echo "======================================================"
+
+          python process_campaign_leads.py --limit $BATCH_SIZE --offset $OFFSET --campaign-type "$CAMPAIGN_TYPE"
+
+      - name: Upload log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: campaign-bulk-batch-${{ matrix.batch }}-${{ github.run_id }}
+          path: campaign_leads.log
+          retention-days: 30
+
+  # ============================================================
+  # Bulk refresh outreach — parallel jobs via matrix
+  # Each job refreshes a slice of leads using --limit and --offset
+  # ============================================================
+  refresh-bulk:
+    if: github.event.inputs.task == 'Bulk Refresh Outreach (parallel)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyairtable anthropic pyyaml
+
+      - name: Create config from secrets
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          AIRTABLE_BASE_ID: ${{ secrets.AIRTABLE_BASE_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python setup.py
+
+      - name: Refresh outreach batch
+        run: |
+          BATCH="${{ matrix.batch }}"
+          BATCH_SIZE="${{ github.event.inputs.batch_size || '50' }}"
+          CAMPAIGN_TYPE="${{ github.event.inputs.campaign_type || 'general' }}"
+          CAMPAIGN_NAME="${{ github.event.inputs.campaign_name }}"
+          OFFSET=$((BATCH * BATCH_SIZE))
+
+          echo "======================================================"
+          echo "REFRESH BATCH $BATCH: Leads $OFFSET to $((OFFSET + BATCH_SIZE - 1))"
+          echo "======================================================"
+
+          CMD="python process_campaign_leads.py --refresh-outreach --limit $BATCH_SIZE --offset $OFFSET --campaign-type $CAMPAIGN_TYPE"
+          if [ -n "$CAMPAIGN_NAME" ]; then
+            CMD="$CMD --campaign-name \"$CAMPAIGN_NAME\""
+          fi
+          eval $CMD
+
+      - name: Upload log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: campaign-refresh-batch-${{ matrix.batch }}-${{ github.run_id }}
+          path: campaign_leads.log
+          retention-days: 30
