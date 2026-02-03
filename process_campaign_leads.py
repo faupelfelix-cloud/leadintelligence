@@ -364,45 +364,63 @@ Return ONLY JSON, no other text."""
 
 COMPANY: {company_name}
 
-Find and return ALL of the following:
+═══════════════════════════════════════════════════════════
+CRITICAL RULES — READ BEFORE RESEARCHING:
+═══════════════════════════════════════════════════════════
+1. ONLY report facts you can verify from web search results. If you cannot find a specific data point, return null for that field — do NOT guess or infer.
+2. DISAMBIGUATION: If "{company_name}" matches multiple companies, pick the one most likely to be a biotech/pharma. If still ambiguous, pick the best match and note it in disambiguation_note.
+3. FUNDING: Only report funding rounds that appear in a credible source (press release, Crunchbase, SEC filing, news article). If you cannot find a specific funding amount or round, return null. NEVER guess funding amounts.
+4. PIPELINE STAGE: Only report the stage explicitly stated in search results. Do NOT upgrade "Phase 1" to "Phase 2" based on assumptions. If unclear, use "Unknown".
+5. THERAPEUTIC AREAS: Only include areas explicitly mentioned in the company's own materials or credible news. Do NOT infer from disease names in program descriptions.
+6. CDMO PARTNERSHIPS: Only report partnerships confirmed in search results. "None found" is perfectly valid — do NOT guess.
+7. For every key field, include a confidence level: "high" (found in multiple sources or company website), "medium" (single credible source), "low" (inferred or uncertain).
+
+Find the following (return null for anything you CANNOT verify):
 1. Website URL
 2. LinkedIn company page URL
 3. Headquarters location (city, country)
-4. Company size - MUST be exactly one of: {', '.join(VALID_COMPANY_SIZE)}
-5. Focus areas - MUST be from: {', '.join(VALID_FOCUS_AREAS)}
-6. Technology platform - MUST be from: {', '.join(VALID_TECH_PLATFORMS)}
-7. Funding stage - MUST be exactly one of: {', '.join(VALID_FUNDING_STAGES)}
-8. Total funding raised (USD number only, e.g. 75000000)
-9. Latest funding round description (e.g. "Series B - $50M - Jan 2024")
-10. Pipeline stages - MUST be from: {', '.join(VALID_PIPELINE_STAGES)}
-11. Lead programs/products (text description)
-12. Therapeutic areas - MUST be from: {', '.join(VALID_THERAPEUTIC_AREAS)}
-13. Current CDMO partnerships (text - names of CDMOs if any)
-14. Manufacturing status - MUST be exactly one of: {', '.join(VALID_MANUFACTURING_STATUS)}
+4. Company size — MUST be one of: {', '.join(VALID_COMPANY_SIZE)}, or null
+5. Focus areas — MUST be from: {', '.join(VALID_FOCUS_AREAS)}, or empty list
+6. Technology platform — MUST be from: {', '.join(VALID_TECH_PLATFORMS)}, or empty list
+7. Funding stage — MUST be one of: {', '.join(VALID_FUNDING_STAGES)}
+8. Total funding raised (USD, e.g. 75000000) — ONLY if found in a source, otherwise null
+9. Latest funding round description — ONLY if found in a source, otherwise null
+10. Pipeline stages — MUST be from: {', '.join(VALID_PIPELINE_STAGES)}
+11. Lead programs/products
+12. Therapeutic areas — MUST be from: {', '.join(VALID_THERAPEUTIC_AREAS)}, or empty list
+13. Current CDMO partnerships — ONLY if confirmed in search results, otherwise "None found"
+14. Manufacturing status — MUST be one of: {', '.join(VALID_MANUFACTURING_STATUS)}
 15. Recent news or developments
-16. ICP Score (0-90) with justification - score 0 if this is a CDMO/CMO/service provider
-17. Urgency Score (0-100) - how urgent is outreach?
+16. ICP Score (0-90) with justification — score 0 if this is a CDMO/CMO/service provider
+17. Urgency Score (0-100)
 
 Return ONLY valid JSON:
 {{
-    "website": "https://...",
-    "linkedin_company_page": "https://linkedin.com/company/...",
+    "website": "https://... or null",
+    "linkedin_company_page": "https://linkedin.com/company/... or null",
     "location": "City, Country",
     "company_size": "51-200",
-    "focus_areas": ["mAbs", "Bispecifics"],
+    "focus_areas": ["mAbs"],
     "technology_platforms": ["Mammalian CHO"],
     "funding_stage": "Series B",
     "total_funding_usd": 75000000,
-    "latest_funding_round": "Series B - $50M - Jan 2024",
+    "latest_funding_round": "Series B - $50M - Jan 2024 or null",
     "pipeline_stages": ["Phase 2"],
-    "lead_programs": "ABC-123 (anti-CD20 mAb) for autoimmune diseases",
-    "therapeutic_areas": ["Oncology", "Autoimmune"],
-    "cdmo_partnerships": "None publicly announced",
+    "lead_programs": "Program description or null",
+    "therapeutic_areas": ["Oncology"],
+    "cdmo_partnerships": "Partner name or None found",
     "manufacturing_status": "No Public Partner",
-    "recent_news": "Recently announced positive Phase 2 data...",
+    "recent_news": "Recent news or null",
     "icp_score": 65,
-    "icp_justification": "Mid-stage biotech with biologics focus, no public CDMO partner.",
-    "urgency_score": 75
+    "icp_justification": "Justification text",
+    "urgency_score": 75,
+    "disambiguation_note": "null or explanation if company name was ambiguous",
+    "data_confidence": {{
+        "funding": "high|medium|low|unverified",
+        "pipeline": "high|medium|low|unverified",
+        "therapeutic_areas": "high|medium|low|unverified",
+        "cdmo_partnerships": "high|medium|low|unverified"
+    }}
 }}
 
 Return ONLY JSON."""
@@ -529,9 +547,28 @@ Return ONLY JSON."""
             if data.get('manufacturing_status'):
                 update_fields['Manufacturing Status'] = validate_single(data['manufacturing_status'], VALID_MANUFACTURING_STATUS, 'Unknown')
             
-            # Intelligence Notes
+            # Data confidence and intelligence notes
+            data_confidence = data.get('data_confidence', {})
+            disambiguation = data.get('disambiguation_note')
+            
+            notes_parts = []
             if data.get('recent_news'):
-                update_fields['Intelligence Notes'] = f"Source: Campaign Leads\n\n{data['recent_news'][:900]}"
+                notes_parts.append(f"Recent News: {data['recent_news'][:500]}")
+            if data_confidence:
+                low_confidence = [f"⚠ {k}: {v}" for k, v in data_confidence.items() if v in ('low', 'unverified')]
+                if low_confidence:
+                    notes_parts.append("Data Confidence Warnings:\n" + "\n".join(low_confidence))
+            if disambiguation:
+                notes_parts.append(f"Disambiguation: {disambiguation}")
+            if notes_parts:
+                update_fields['Intelligence Notes'] = "Source: Campaign Leads\n\n" + "\n\n".join(notes_parts)
+            
+            # Store raw confidence JSON for downstream use (outreach filtering)
+            if data_confidence:
+                try:
+                    update_fields['Data Confidence'] = json.dumps(data_confidence)
+                except:
+                    pass
             
             # Scores and justifications
             if data.get('icp_score') is not None:
@@ -655,17 +692,25 @@ Return ONLY JSON."""
         prompt = f"""Research this professional for contact information:
 
 NAME: {lead_name}
-TITLE: {title}
+TITLE (from our records): {title}
 COMPANY: {company_name}
+
+═══════════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════════
+1. TITLE: The title above is what we already have on file. KEEP this title unless web search clearly shows a DIFFERENT current title at the SAME company. If you find a different title, set title_changed to true and explain why.
+2. LINKEDIN: Only return a LinkedIn URL if you find the EXACT person (matching name AND company). Do NOT guess LinkedIn URLs or construct them from name patterns.
+3. EMAIL: Search thoroughly but return null if not found — do NOT fabricate email addresses.
+4. Only return information about THIS specific person at THIS company. If you find multiple people with the same name, match by company.
 
 Find:
 1. Email address (search company website, press releases, LinkedIn, conference presentations)
-2. Verify current title
-3. LinkedIn URL
+2. Verify current title (see rule 1 above)
+3. LinkedIn URL (see rule 2 above)
 4. Location (city, country)
 5. Any recent news, speaking engagements, or publications
 
-EMAIL FINDING PRIORITY - try these sources:
+EMAIL FINDING PRIORITY — try these sources:
 - Company website team/leadership page
 - Press releases with contact info
 - Conference speaker lists
@@ -676,10 +721,18 @@ Return ONLY valid JSON:
 {{
     "email": "email@company.com or null",
     "email_confidence": "High|Medium|Low|Pattern Suggested",
-    "title": "Current verified title",
-    "linkedin_url": "https://linkedin.com/in/...",
-    "location": "City, Country",
-    "recent_activity": "Any recent news or speaking engagements"
+    "title": "{title}",
+    "title_changed": false,
+    "title_change_reason": "null or reason why title was updated",
+    "linkedin_url": "https://linkedin.com/in/... or null",
+    "location": "City, Country or null",
+    "recent_activity": "Any recent news or speaking engagements, or null",
+    "data_confidence": {{
+        "email": "high|medium|low|unverified",
+        "title": "high|medium|low|unverified",
+        "linkedin": "high|medium|low|unverified",
+        "identity_match": "high|medium|low"
+    }}
 }}
 
 Return ONLY JSON."""
@@ -764,6 +817,14 @@ Return ONLY JSON."""
                 update_fields['LinkedIn URL'] = data['linkedin_url']
             if data.get('recent_activity'):
                 update_fields['Intelligence Notes'] = f"Source: Campaign Leads\n\n{data['recent_activity'][:800]}"
+            
+            # Store lead data confidence for downstream use
+            lead_data_confidence = data.get('data_confidence', {})
+            if lead_data_confidence:
+                try:
+                    update_fields['Data Confidence'] = json.dumps(lead_data_confidence)
+                except:
+                    pass
             
             try:
                 self.leads_table.update(record_id, update_fields)
@@ -854,7 +915,30 @@ Return ONLY JSON."""
     
     def _generate_lead_generic_outreach(self, lead_id: str, lead_name: str, 
                                         lead_title: str, company_name: str) -> bool:
-        """Generate generic outreach messages for the Lead record (not campaign-specific)"""
+        """Generate generic outreach messages for the Lead record (not campaign-specific).
+        
+        Fetches company context from the linked company record for better personalization.
+        """
+        
+        # Fetch company context for personalization
+        company_context = "Biotech company"
+        try:
+            lead_record = self.leads_table.get(lead_id)
+            company_ids = lead_record['fields'].get('Company', [])
+            if company_ids:
+                company_record = self.companies_table.get(company_ids[0])
+                cf = company_record['fields']
+                parts = []
+                tech = cf.get('Technology Platform', [])
+                if tech:
+                    parts.append(f"Technology: {', '.join(tech) if isinstance(tech, list) else tech}")
+                ta = cf.get('Therapeutic Areas', [])
+                if ta:
+                    parts.append(f"Focus: {', '.join(ta) if isinstance(ta, list) else ta}")
+                if parts:
+                    company_context = '\n'.join(parts)
+        except:
+            pass
         
         prompt = f"""Generate professional outreach messages for this lead.
 
@@ -863,32 +947,38 @@ Name: {lead_name}
 Title: {lead_title}
 Company: {company_name}
 
+COMPANY BACKGROUND (verified):
+{company_context}
+
 YOUR COMPANY: European biologics CDMO specializing in mammalian cell culture manufacturing (mAbs, bispecifics, ADCs)
 
-Generate 4 messages for initial outreach:
+═══════════════════════════════════════════════════════════
+RULES:
+═══════════════════════════════════════════════════════════
+- NEVER mention specific funding amounts or rounds
+- NEVER claim specific pipeline stages unless listed above
+- NEVER mention CDMO partnerships
+- Pick ONE relevant detail max
+- Keep messages short and natural
 
-1. EMAIL (80-100 words):
-Subject: [Professional subject line]
-- Brief intro
-- Value proposition relevant to their role
-- Soft CTA
-- Sign: "Best regards, [Your Name]"
+Generate 4 messages:
 
-2. LINKEDIN CONNECTION (150-180 chars):
-- Why you'd like to connect
-- Professional tone
+1. EMAIL (60-80 words max):
+Subject: [Short, professional]
+Body: Brief intro, one relevant detail about their work, soft CTA
+Sign: "Best regards, [Your Name]"
 
-3. LINKEDIN SHORT MESSAGE (200-300 chars):
-- Relevant to their role
-- Brief value mention
-- Sign: "Best regards, [Your Name]"
+2. LINKEDIN CONNECTION (under 200 chars):
+Why you'd like to connect, professional tone
 
-4. LINKEDIN INMAIL (150-200 words):
-Subject: [InMail subject]
-- More detailed intro
-- Clear value proposition
-- CTA
-- Sign: "Best regards, [Your Name]"
+3. LINKEDIN SHORT MESSAGE (under 300 chars):
+Relevant to their role, brief value mention
+Sign: "Best regards, [Your Name]"
+
+4. LINKEDIN INMAIL (60-80 words max):
+Subject: [Natural, not salesy]
+Body: Conversational, references their work
+Sign: "Best regards, [Your Name]"
 
 Return ONLY valid JSON:
 {{
@@ -1107,7 +1197,11 @@ Return ONLY JSON."""
     
     def generate_outreach_messages(self, lead_fields: Dict, company_fields: Dict, 
                                    campaign_context: Dict = None) -> Dict[str, str]:
-        """Generate personalized outreach messages with campaign context"""
+        """Generate personalized outreach messages with campaign context.
+        
+        Only passes HIGH-CONFIDENCE company data to the prompt to prevent
+        hallucinated claims from appearing in outreach messages.
+        """
         
         # === BASIC INFO ===
         name = lead_fields.get('Lead Name', 'there')
@@ -1122,29 +1216,61 @@ Return ONLY JSON."""
         campaign_background = campaign_context.get('Campaign Background', '')
         campaign_date = campaign_context.get('Campaign Date', '')
         
-        # === COMPANY CONTEXT (brief, not exhaustive) ===
-        # Only include key points that would naturally come up in conversation
+        # === COMPANY CONTEXT — CONFIDENCE-FILTERED ===
+        # Parse data confidence if available
+        data_confidence = {}
+        raw_confidence = company_fields.get('Data Confidence', '')
+        if raw_confidence:
+            try:
+                data_confidence = json.loads(raw_confidence)
+            except:
+                pass
+        
+        def is_safe(field_name: str) -> bool:
+            """Only pass data with high or medium confidence to the prompt"""
+            conf = data_confidence.get(field_name, 'high')  # Default high for older records
+            return conf in ('high', 'medium')
+        
+        # Build SAFE company context — only verified data
         company_context = []
         
-        pipeline = company_fields.get('Lead Programs', '')
-        if pipeline:
-            company_context.append(f"Pipeline: {pipeline[:200]}")  # Truncate
-        
+        # Technology platform is usually safe (from company website)
         tech_platform = company_fields.get('Technology Platform', [])
         if tech_platform:
             if isinstance(tech_platform, list):
                 tech_platform = ', '.join(tech_platform)
             company_context.append(f"Technology: {tech_platform}")
         
+        # Therapeutic areas — only if confident
         therapeutic = company_fields.get('Therapeutic Areas', [])
-        if therapeutic:
+        if therapeutic and is_safe('therapeutic_areas'):
             if isinstance(therapeutic, list):
                 therapeutic = ', '.join(therapeutic)
             company_context.append(f"Focus: {therapeutic}")
         
-        company_context_text = '\n'.join(company_context) if company_context else 'General biotech'
+        # Pipeline — only if confident, and truncated
+        pipeline = company_fields.get('Lead Programs', '')
+        if pipeline and is_safe('pipeline'):
+            company_context.append(f"Pipeline: {pipeline[:150]}")
         
-        # === BUILD CAMPAIGN-SPECIFIC PROMPT ===
+        company_context_text = '\n'.join(company_context) if company_context else 'Biotech company'
+        
+        # === EXPLICIT "DO NOT MENTION" LIST ===
+        do_not_mention = []
+        if not is_safe('funding'):
+            do_not_mention.append("specific funding rounds or amounts")
+        if not is_safe('pipeline'):
+            do_not_mention.append("specific pipeline stages (Phase 1/2/3)")
+        if not is_safe('therapeutic_areas'):
+            do_not_mention.append("specific therapeutic areas")
+        if not is_safe('cdmo_partnerships'):
+            do_not_mention.append("CDMO partnerships or manufacturing partners")
+        
+        do_not_mention_text = ""
+        if do_not_mention:
+            do_not_mention_text = "\n⚠️ DO NOT MENTION (unverified): " + ", ".join(do_not_mention)
+        
+        # === CAMPAIGN-SPECIFIC SECTION ===
         campaign_section = ""
         if campaign_type == 'Conference' and conference_name:
             campaign_section = f"""
@@ -1152,10 +1278,10 @@ CAMPAIGN: Conference outreach for {conference_name}
 Date: {campaign_date}
 Background: {campaign_background}
 
-This is conference outreach - the conference is the REASON for reaching out.
+This is conference outreach — the conference is the REASON for reaching out.
 - Mention you'll be at {conference_name}
 - Suggest meeting at the event
-- Keep it natural - like reaching out to someone you'd like to meet
+- Keep it natural — like reaching out to someone you'd like to meet
 """
         elif campaign_type == 'Roadshow':
             campaign_section = f"""
@@ -1163,10 +1289,10 @@ CAMPAIGN: Roadshow outreach
 Date: {campaign_date}
 Background: {campaign_background}
 
-This is roadshow outreach - you're visiting their region/city.
+This is roadshow outreach — you're visiting their region/city.
 - Mention you'll be in their area for meetings
 - Suggest meeting while you're there
-- Frame it as convenient timing for both parties
+- Frame it as convenient timing
 - Keep it natural and low-pressure
 """
         elif campaign_background:
@@ -1180,43 +1306,48 @@ Use this context as the natural reason for reaching out.
 
 LEAD: {name}, {title} at {company} ({location})
 
-COMPANY BACKGROUND:
+COMPANY BACKGROUND (verified):
 {company_context_text}
+{do_not_mention_text}
 {campaign_section}
 REZON BIO (your company):
 European CDMO specializing in mammalian CHO cell culture for mAbs, bispecifics, and ADCs.
 Target: Mid-size biotechs needing manufacturing support.
 
 ═══════════════════════════════════════════════════════════
-STYLE RULES - CRITICAL:
+STYLE RULES — CRITICAL:
 ═══════════════════════════════════════════════════════════
-1. **Natural, human language** - slightly imperfect is fine
-2. **NO bullet lists** anywhere - weave points into sentences
-3. **NO ** for bold** - clean formatting only
+1. **Natural, human language** — slightly imperfect is fine
+2. **NO bullet lists** — weave points into sentences
+3. **NO **bold** markup** — clean formatting only
 4. **Show you know them, don't tell them their situation**
    BAD: "Your company focuses on oncology and has Phase 2 programs"
    GOOD: "Given your work in oncology..."
-5. **About THEM, not about us** - lead with their context
-6. **Soft CTA** - "would be great to connect" not "let's schedule a call"
-7. **Don't overload with intel** - pick 1-2 relevant details max
-8. **Sound like a human wrote it** - not an AI that scraped their LinkedIn
+5. **About THEM, not about us** — lead with their context
+6. **Soft CTA** — "would be great to connect" not "let's schedule a call"
+7. **Pick ONE relevant detail max** — do NOT stack multiple company facts
+8. **Sound like a human wrote it** — not an AI that scraped their LinkedIn
+9. **NEVER mention specific funding amounts or rounds**
+10. **NEVER claim specific pipeline stages** unless listed above as verified
+11. **NEVER mention CDMO partnerships or manufacturing decisions**
+12. **Keep messages SHORT** — less is more
 
 ═══════════════════════════════════════════════════════════
 GENERATE FOUR MESSAGES:
 ═══════════════════════════════════════════════════════════
 
-MESSAGE 1: EMAIL (100-130 words)
-Subject: [Natural, references their context or the conference]
-Body: Conversational, references campaign context naturally, soft CTA
+MESSAGE 1: EMAIL (60-80 words max — HARD LIMIT)
+Subject: [Natural, short, references context or conference]
+Body: Brief, conversational, ONE detail max, soft CTA
 Sign: "Best regards, [Your Name]"
 
 MESSAGE 2: LINKEDIN CONNECTION (under 200 chars)
-Brief, friendly, reference their role or company or conference
+Brief, friendly, reference role or company or conference
 No signature
 
 MESSAGE 3: LINKEDIN INMAIL 
 Subject: [Natural, not salesy]
-Body: 80-100 words, conversational, references their work
+Body: 60-80 words max, conversational
 Sign: "Best, [Your Name]"
 
 MESSAGE 4: LINKEDIN SHORT (under 180 chars)
