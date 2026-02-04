@@ -27,7 +27,9 @@ from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
 from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention, classify_persona)
+                                   suppressed_to_do_not_mention, classify_persona,
+                                   inline_quality_check, validate_and_retry,
+                                   generate_validate_loop)
 
 # Configure logging FIRST
 logging.basicConfig(
@@ -1049,6 +1051,34 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
+            # Full validation loop: structural check + web search fact-check + regen
+            persona = classify_persona(lead_title)
+            
+            def gen_fn(feedback=None):
+                regen_prompt = prompt + (f"\n\n{feedback}" if feedback else "")
+                msg = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'], max_tokens=2000,
+                    messages=[{"role": "user", "content": regen_prompt}]
+                )
+                rt = "".join(b.text for b in msg.content if hasattr(b, 'text'))
+                rj = rt.split("```json")[1].split("```")[0] if "```json" in rt else (rt[rt.find("{"):rt.rfind("}")+1] if "{" in rt else None)
+                return json.loads(rj.strip()) if rj else None
+            
+            val_context = {
+                'lead_name': lead_name, 'lead_title': lead_title,
+                'company_name': company_name,
+                'company_data': company_fields,
+            }
+            
+            data, quality = generate_validate_loop(
+                self.anthropic_client, self.config['anthropic']['model'],
+                gen_fn, val_context, persona=persona,
+                pre_generated=data
+            )
+            
+            if not data:
+                return False
+            
             # Update lead with outreach messages
             outreach_update = {
                 'Message Generated Date': datetime.now().strftime('%Y-%m-%d')
@@ -1682,12 +1712,37 @@ Return ONLY valid JSON:
                     'Campaign Date': fields.get('Campaign Date', ''),
                 }
                 
-                # Generate messages with campaign context
-                messages = self.generate_outreach_messages(lead_data, company_data, campaign_context)
+                # Generate → Validate → Retry loop
+                title = fields.get('Title', lead_data.get('Title', ''))
+                persona = classify_persona(title)
+                company_name = fields.get('Company', company_data.get('Company Name', ''))
+                
+                def gen_fn(feedback=None):
+                    ctx = dict(campaign_context)
+                    if feedback:
+                        ctx['Campaign Background'] = (
+                            ctx.get('Campaign Background', '') + f"\n\n{feedback}"
+                        )
+                    return self.generate_outreach_messages(lead_data, company_data, ctx)
+                
+                val_context = {
+                    'lead_name': name, 'lead_title': title,
+                    'company_name': company_name,
+                    'company_data': company_data,
+                    'campaign_type': campaign_context.get('Campaign Type', ''),
+                    'campaign_name': campaign_context.get('Conference Name', ''),
+                }
+                
+                messages, quality = generate_validate_loop(
+                    self.anthropic_client, self.config['anthropic']['model'],
+                    gen_fn, val_context, persona=persona, source_type='campaign'
+                )
                 
                 if messages:
                     if self.update_campaign_lead_outreach(record_id, messages):
-                        logger.info(f"  ✓ Outreach generated")
+                        vr = quality.get('validation_rating', '?')
+                        vs = quality.get('validation_score', 0)
+                        logger.info(f"  ✓ Outreach generated (validation: {vs}/100 {vr})")
                         success += 1
                 else:
                     logger.warning(f"  ⚠ Failed to generate messages")
@@ -1840,12 +1895,35 @@ Return ONLY valid JSON:
                     'Campaign Date': fields.get('Campaign Date', ''),
                 }
                 
-                # Generate new messages with Company Profile context
-                messages = self.generate_outreach_messages(lead_data, company_data, campaign_context)
+                # Generate → Validate → Retry loop
+                title = fields.get('Title', lead_data.get('Title', ''))
+                persona = classify_persona(title)
+                
+                def gen_fn(feedback=None):
+                    ctx = dict(campaign_context)
+                    if feedback:
+                        ctx['Campaign Background'] = (
+                            ctx.get('Campaign Background', '') + f"\n\n{feedback}"
+                        )
+                    return self.generate_outreach_messages(lead_data, company_data, ctx)
+                
+                val_context = {
+                    'lead_name': name, 'lead_title': title,
+                    'company_name': company_display,
+                    'company_data': company_data,
+                    'campaign_type': campaign_context.get('Campaign Type', ''),
+                    'campaign_name': campaign_context.get('Conference Name', ''),
+                }
+                
+                messages, quality = generate_validate_loop(
+                    self.anthropic_client, self.config['anthropic']['model'],
+                    gen_fn, val_context, persona=persona, source_type='campaign'
+                )
                 
                 if messages:
                     if self.update_campaign_lead_outreach(record_id, messages):
-                        logger.info(f"  ✓ Outreach refreshed")
+                        vs = quality.get('validation_score', 0)
+                        logger.info(f"  ✓ Outreach refreshed (validation: {vs}/100)")
                         success += 1
                     else:
                         logger.warning(f"  ⚠ Failed to update record")
