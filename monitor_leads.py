@@ -16,7 +16,9 @@ import anthropic
 from pyairtable import Api
 from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention, classify_persona)
+                                   suppressed_to_do_not_mention, classify_persona,
+                                   inline_quality_check, validate_and_retry,
+                                   full_validate_outreach, generate_validate_loop)
 
 # Configure logging
 logging.basicConfig(
@@ -819,7 +821,38 @@ Return ONLY JSON, no other text."""
             # Remove trailing commas before } or ]
             json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
             
-            return json.loads(json_str)
+            data = json.loads(json_str)
+            
+            # Full validation loop: structural + web search + auto-regen
+            persona = classify_persona(lead_title)
+            
+            def gen_fn(feedback=None):
+                regen_prompt = prompt + (f"\n\n{feedback}" if feedback else "")
+                msg = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'], max_tokens=1500,
+                    messages=[{"role": "user", "content": regen_prompt}]
+                )
+                rt = "".join(b.text for b in msg.content if hasattr(b, 'text'))
+                rj = rt.split("```json")[1].split("```")[0] if "```json" in rt else (rt[rt.find("{"):rt.rfind("}")+1] if "{" in rt else None)
+                return json.loads(re.sub(r',(\s*[}\]])', r'\1', rj.strip())) if rj else None
+            
+            val_context = {
+                'lead_name': lead_name, 'lead_title': lead_title,
+                'company_name': company_name, 'company_data': company_fields,
+                'trigger_type': trigger_type,
+                'trigger_description': description,
+            }
+            
+            data, quality = generate_validate_loop(
+                self.anthropic_client, self.config['anthropic']['model'],
+                gen_fn, val_context, persona=persona, source_type='trigger',
+                pre_generated=data
+            )
+            vs = quality.get('validation_score', 0)
+            vr = quality.get('validation_rating', '?')
+            logger.info(f"    Trigger outreach validated: {vs}/100 ({vr})")
+            
+            return data
             
         except json.JSONDecodeError as je:
             logger.warning(f"    JSON parse error in trigger outreach: {je}")
