@@ -274,7 +274,7 @@ CRITICAL INSTRUCTIONS FOR SCORING:
 
 2. WHO WE WANT (potential customers):
    - Biotech companies developing mAbs, bispecifics, ADCs, fusion proteins
-   - Biosimilar developers (Sandoz, Formycon, etc.)
+   - Biosimilar developers with mammalian pipelines
    - Pharma companies with biologics pipelines
    - Companies that NEED manufacturing (our service)
 
@@ -589,7 +589,7 @@ def test_scorer():
     # Test with a few companies
     test_companies = [
         "BioMarin",
-        "Sandoz",
+        "Alvotech",
         "Fujifilm Diosynth",
         "Arcellx"
     ]
