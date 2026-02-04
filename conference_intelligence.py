@@ -1530,10 +1530,34 @@ Return ONLY JSON."""
         value_prop = build_value_proposition(self.company_profile, company_fields, lead_title, 'Conference', persona_messaging=self.persona_messaging)
         outreach_rules = build_outreach_philosophy()
         
+        # Compute relative timing
+        timing_note = ""
+        if conference_date:
+            try:
+                conf_dt = datetime.strptime(conference_date, '%Y-%m-%d')
+                today = datetime.now()
+                days_until = (conf_dt - today).days
+                if days_until < 0:
+                    timing_note = f"The conference was {abs(days_until)} days ago. Reference it in past tense."
+                elif days_until <= 7:
+                    timing_note = f"The conference is THIS WEEK (in {days_until} days). Say 'this week'."
+                elif days_until <= 14:
+                    timing_note = f"The conference is NEXT WEEK. Say 'next week'."
+                elif days_until <= 45:
+                    timing_note = f"The conference is NEXT MONTH (in about {days_until // 7} weeks). Say 'next month' or 'in a few weeks'."
+                elif days_until <= 90:
+                    timing_note = f"The conference is in about {days_until // 30} months. Say 'in {conf_dt.strftime('%B')}' or 'in a couple of months'."
+                else:
+                    timing_note = f"The conference is in {conf_dt.strftime('%B %Y')}. Reference the month by name."
+            except Exception:
+                timing_note = f"Event date: {conference_date}. Use the correct relative timing."
+        
         prompt = f"""Generate conference-specific outreach messages.
 
 CONFERENCE: {conference_name}
-DATE: {conference_date}
+EVENT DATE: {conference_date}
+TODAY'S DATE: {datetime.now().strftime('%Y-%m-%d')}
+TIMING: {timing_note}
 THEIR ROLE: {role_at_conference}
 {f"SESSION TOPIC: {session_topic}" if session_topic else ""}
 
@@ -1547,7 +1571,8 @@ Company: {company_name}
 
 {outreach_rules}
 
-The conference is the REASON for reaching out — use it as a natural hook.
+The conference is the REASON for reaching out. Use it as a natural hook.
+IMPORTANT: Use the CORRECT relative timing based on the dates above. NEVER guess "next week" if the event is further out.
 
 Generate 3 SHORT messages to connect before/at the conference:
 
