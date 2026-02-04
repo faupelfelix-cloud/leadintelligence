@@ -64,16 +64,6 @@ class DeepLeadProfiler:
         strategy = profile_data.get('outreach_strategy', {})
         icebreakers = profile_data.get('icebreakers', [])
         
-        # Get company profile for our context
-        our_company = "European biologics CDMO specializing in mammalian cell culture (mAbs, bispecifics, ADCs)"
-        our_strengths = "Mammalian cell culture, mAbs, bispecifics, ADCs"
-        our_target = "Mid-size biotech companies"
-        
-        if self.company_profile:
-            our_company = self.company_profile.get('Capabilities', our_company)
-            our_strengths = self.company_profile.get('Strengths', our_strengths)
-            our_target = self.company_profile.get('Market Positioning', our_target)
-        
         # Fetch and filter company data for value prop matching
         company_fields = {}
         do_not_mention_text = ""
