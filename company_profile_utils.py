@@ -84,7 +84,7 @@ PERSONA_BUCKETS = {
             'warehousing', 'warehouse', 'partnership & external',
             'co-development',
         ],
-        'description': 'Cost and reliability focused — they evaluate CDMOs on price, capacity, and risk',
+        'description': 'Cost and reliability focused, they evaluate CDMOs on price, capacity, and risk',
     },
     'Business Development / Commercial': {
         'keywords': [
@@ -118,7 +118,7 @@ PERSONA_BUCKETS = {
             'clinical trial', 'clinical supply', 'clinical systems',
             'post-doc', 'postdoc', 'fellow',
         ],
-        'description': 'Science-driven leaders — less focused on cost, more on capability and innovation',
+        'description': 'Science-driven leaders, less focused on cost, more on capability and innovation',
     },
     'Program / Project Management': {
         'keywords': [
@@ -127,7 +127,7 @@ PERSONA_BUCKETS = {
             'implementation manager', 'planning manager',
             'end-to-end', 'product planning',
         ],
-        'description': 'Execution-focused — timelines, deliverables, hands-on coordination',
+        'description': 'Execution-focused, timelines, deliverables, hands-on coordination',
     },
     'Finance / Investment': {
         'keywords': [
@@ -136,51 +136,51 @@ PERSONA_BUCKETS = {
             'accounting', 'accounts payable', 'accounts receivable',
             'investment', 'venture', 'analyst', 'financial analyst',
         ],
-        'description': 'Numbers-driven — cost efficiency, capital deployment, ROI',
+        'description': 'Numbers-driven, cost efficiency, capital deployment, ROI',
     },
 }
 
-# Hardcoded fallback persona messaging — used when Persona Messaging table
+# Hardcoded fallback persona messaging, used when Persona Messaging table
 # is not available. This is the MINIMUM; the Airtable table should have
 # much richer content.
 DEFAULT_PERSONA_MESSAGING = {
     'C-Level / Owner': {
         'Value Drivers': 'Strategic fit, risk mitigation, speed to market, reliable partnership, cost efficiency at scale, partner who treats them as priority (not small fish at big CDMO)',
-        'Proof Points': 'Multinational pharma validated (Sandoz), 95% batch success rate, FDA+EMA+Anvisa approved, fast decision-making as mid-size partner, lower half of EU cost benchmarks',
-        'Tone': 'Strategic, concise, peer-to-peer. Lead with business impact. Respect their time — these are the busiest people. Get to the point fast.',
+        'Proof Points': 'Multinational pharma validated, 95% batch success rate, FDA+EMA+Anvisa approved, fast decision-making as mid-size partner, lower half of EU cost benchmarks',
+        'Tone': 'Strategic, concise, peer-to-peer. Lead with business impact. Respect their time, these are the busiest people. Get to the point fast.',
         'What They Dont Want': 'Technical deep-dives, capability lists, feature dumps, aggressive sales tactics, long emails',
-        'Example Angles': """- Strategic fit: "For a biotech at your stage, having a manufacturing partner who can scale with you matters — we're set up for exactly that"
+        'Example Angles': """- Strategic fit: "For a biotech at your stage, having a manufacturing partner who can scale with you matters, we're set up for exactly that"
 - De-risking: "Locking in a validated manufacturing partner before Phase 3 removes a big variable from the equation"
-- Speed: "Our mid-size setup means faster decisions — no 6-month onboarding process"
+- Speed: "Our mid-size setup means faster decisions, no 6-month onboarding process"
 - Partner priority: "At a big CDMO, a program your size might not get priority. With us, every client gets direct access to leadership"
-- Cost efficiency: "We sit in the lower half of EU cost benchmarks — your runway stretches further without compromising quality"
-- Capital efficiency: "For a funded biotech, manufacturing spend is one of the biggest line items — getting it right matters"
+- Cost efficiency: "We sit in the lower half of EU cost benchmarks, your runway stretches further without compromising quality"
+- Capital efficiency: "For a funded biotech, manufacturing spend is one of the biggest line items, getting it right matters"
 Keep messages SHORT for C-level. They skim.""",
     },
     'Operations / Manufacturing': {
         'Value Drivers': 'PPQ experience and campaign execution, tech transfer speed and methodology, facility fit (500-2000L bioreactors, mammalian CHO), batch success rate (95%), GMP track record, operational flexibility, ability to handle complex molecules',
-        'Proof Points': 'Sandoz-qualified facilities (sets operational bar), 95% batch success rate, proven PPQ campaign execution, 500-2000L single-use and stainless steel bioreactors, structured tech transfer process with clear milestones, experience with mAbs/bispecifics/ADCs',
-        'Tone': 'Technical and practical. These people live in the details — they want specifics, not marketing. Lead with execution capability and relevant operational experience. Be concrete about what your facility can do.',
+        'Proof Points': 'Multinational pharma-qualified facilities (sets operational bar), 95% batch success rate, proven PPQ campaign execution, 500-2000L single-use and stainless steel bioreactors, structured tech transfer process with clear milestones, experience with mAbs/bispecifics/ADCs',
+        'Tone': 'Technical and practical. These people live in the details, they want specifics, not marketing. Lead with execution capability and relevant operational experience. Be concrete about what your facility can do.',
         'What They Dont Want': 'Marketing fluff, vague promises, cost-only arguments, generic "we are a CDMO" pitches. They need to trust your EXECUTION capability before anything else.',
-        'Example Angles': """- PPQ: "We've run PPQ campaigns for mammalian products — happy to walk through our approach and timelines"
-- Tech transfer: "Our tech transfer process is structured with clear milestones — typically X months from kick-off to GMP"
-- Facility fit: "Our 500-2000L setup handles [their molecule type] well — we've done similar molecules"
-- Batch success: "95% batch success rate across our GMP campaigns — we track it closely"
+        'Example Angles': """- PPQ: "We've run PPQ campaigns for mammalian products, happy to walk through our approach and timelines"
+- Tech transfer: "Our tech transfer process is structured with clear milestones, typically X months from kick-off to GMP"
+- Facility fit: "Our 500-2000L setup handles [their molecule type] well, we've done similar molecules"
+- Batch success: "95% batch success rate across our GMP campaigns, we track it closely"
 - Scale-up: "If you're moving from pilot to GMP, that transition is something we've done multiple times"
-- Complex molecules: "Bispecifics/ADCs have specific manufacturing challenges — our team has hands-on experience with those"
+- Complex molecules: "Bispecifics/ADCs have specific manufacturing challenges, our team has hands-on experience with those"
 - Operational flexibility: "As a mid-size CDMO, we can adapt to your process rather than forcing you into a platform"
 Pick the angle that best matches their specific operational situation.""",
     },
     'Quality / Regulatory': {
         'Value Drivers': 'Regulatory track record (FDA/EMA/Anvisa approvals), inspection history, quality systems maturity, deviation handling capabilities, qualified person availability, documentation standards, comparability study experience',
-        'Proof Points': 'FDA approved, EMA approved, Anvisa approved, Sandoz qualification (multinational pharma-level quality bar), clean inspection history, 95% batch success rate as quality indicator, established quality management system',
+        'Proof Points': 'FDA approved, EMA approved, Anvisa approved, multinational pharma qualification (pharma-level quality bar), clean inspection history, 95% batch success rate as quality indicator, established quality management system',
         'Tone': 'Precise, evidence-based, no exaggeration. Quality people are allergic to overclaiming. Understate rather than overstate. They respect facts and track records, not promises.',
         'What They Dont Want': 'Marketing language, unsubstantiated claims, cost arguments (cost is irrelevant if quality is not proven first), aggressive sales language',
-        'Example Angles': """- Regulatory approvals: "We hold FDA, EMA, and Anvisa approvals — happy to share our inspection history"
-- Quality systems: "Our quality systems were built to Sandoz standards — the bar was set high from day one"
-- Inspection readiness: "We've had clean regulatory inspections — can walk you through our track record"
+        'Example Angles': """- Regulatory approvals: "We hold FDA, EMA, and Anvisa approvals, happy to share our inspection history"
+- Quality systems: "Our quality systems were built to multinational pharma standards, the bar was set high from day one"
+- Inspection readiness: "We've had clean regulatory inspections, can walk you through our track record"
 - Documentation: "Our documentation and batch record standards are built for multinational pharma audits"
-- Deviation handling: "We have a mature CAPA system — deviation rates and resolution times are something we track closely"
+- Deviation handling: "We have a mature CAPA system, deviation rates and resolution times are something we track closely"
 - Comparability: "If you need comparability studies for tech transfer, we've done that for several programs"
 - Qualified Person: "We have experienced QPs in-house for EU batch release"
 Pick the angle that best matches their specific quality/regulatory concern.""",
@@ -190,11 +190,11 @@ Pick the angle that best matches their specific quality/regulatory concern.""",
         'Proof Points': 'Lower half of EU cost benchmarks with pharma-grade quality, reliable capacity, EU-based manufacturing, flexible batch scheduling, long-term partnership pricing, multinational pharma validated (not a cheap/risky option)',
         'Tone': 'Data-driven, commercial, straightforward. Procurement speaks numbers and risk. Give concrete cost positioning and capacity facts.',
         'What They Dont Want': 'Technical jargon, capability presentations, vague "partnership" language, science deep-dives. They want facts on cost, capacity, and reliability.',
-        'Example Angles': """- Cost position: "We sit in the lower half of EU CDMO cost benchmarks — pharma-grade quality without the premium brand markup"
+        'Example Angles': """- Cost position: "We sit in the lower half of EU CDMO cost benchmarks, pharma-grade quality without the premium brand markup"
 - Dual sourcing: "If you're looking to diversify your manufacturing base, an EU-based second source could make sense"
-- Capacity: "We have capacity available for [timeframe] — happy to discuss batch scheduling"
+- Capacity: "We have capacity available for [timeframe], happy to discuss batch scheduling"
 - Total cost: "When you factor in logistics, regulatory alignment, and communication overhead, our total cost of ownership is very competitive"
-- Pricing transparency: "Our pricing model is transparent — no hidden costs or surprise upcharges"
+- Pricing transparency: "Our pricing model is transparent, no hidden costs or surprise upcharges"
 - Supply security: "EU-based manufacturing means shorter supply chains and less exposure to shipping disruptions"
 This is the ONE persona where leading with cost makes sense. Be specific about cost positioning.""",
     },
@@ -203,25 +203,25 @@ This is the ONE persona where leading with cost makes sense. Be specific about c
         'Proof Points': 'FDA+EMA+Anvisa for global filing, clinical-to-commercial continuity, competitive pricing for market-competitive COGS, agile mid-size partner for fast decisions',
         'Tone': 'Strategic and forward-looking. Think about their commercial goals and how manufacturing fits into their launch and partnership strategy.',
         'What They Dont Want': 'Deep technical details, quality system descriptions, operational specifics. They want to know how you help them get to market and compete.',
-        'Example Angles': """- Global filing: "With FDA, EMA, and Anvisa approvals, your manufacturing is already set up for global filing — no second facility needed"
-- COGS: "Getting competitive COGS early helps your commercial positioning — our cost structure supports that"
-- Speed to market: "Manufacturing shouldn't be the bottleneck — our lead times and decision speed are built for biotech timelines"
+        'Example Angles': """- Global filing: "With FDA, EMA, and Anvisa approvals, your manufacturing is already set up for global filing, no second facility needed"
+- COGS: "Getting competitive COGS early helps your commercial positioning, our cost structure supports that"
+- Speed to market: "Manufacturing shouldn't be the bottleneck, our lead times and decision speed are built for biotech timelines"
 - Partnership flexibility: "If you're in licensing discussions, having a flexible manufacturing partner makes deal structuring easier"
-- Clinical to commercial: "We can take you from clinical supply through commercial without switching CDMOs — one tech transfer, not two"
+- Clinical to commercial: "We can take you from clinical supply through commercial without switching CDMOs, one tech transfer, not two"
 Pick the angle that matches their commercial stage and goals.""",
     },
     'R&D / Scientific': {
         'Value Drivers': 'Scientific expertise in mammalian cell culture, process development capabilities, molecule-specific experience (mAbs, bispecifics, ADCs), analytical development, cell line development support, scientific collaboration model',
         'Proof Points': 'CHO platform expertise, experience with complex molecules (bispecifics, ADCs), process development from gene to GMP, analytical method development and transfer, biosimilar development track record',
         'Tone': 'Scientific, substantive. R&D people respect depth and specificity. Show you understand their molecule type and development challenges. Be a scientist talking to a scientist.',
-        'What They Dont Want': 'Cost-first arguments (irrelevant to them), generic CDMO pitches, marketing language, Sandoz name-dropping. Lead with SCIENCE, not price or credentials.',
-        'Example Angles': """- Process development: "Our PD team has experience developing processes for [their molecule type] — happy to discuss approach"
+        'What They Dont Want': 'Cost-first arguments (irrelevant to them), generic CDMO pitches, marketing language, credential name-dropping. Lead with SCIENCE, not price or credentials.',
+        'Example Angles': """- Process development: "Our PD team has experience developing processes for [their molecule type], happy to discuss approach"
 - CHO platform: "We run a well-established CHO platform with good clone selection and cell line development capabilities"
-- Analytical: "We have in-house analytical development — method development and transfer is something we handle end-to-end"
-- Complex molecules: "Bispecifics/ADCs come with specific development challenges — our team has worked through those before"
+- Analytical: "We have in-house analytical development, method development and transfer is something we handle end-to-end"
+- Complex molecules: "Bispecifics/ADCs come with specific development challenges, our team has worked through those before"
 - Biosimilar: "If it's a biosimilar program, we have gene-to-market experience in that space"
-- Scientific collaboration: "We prefer to work as a scientific partner, not just execute a fixed protocol — our PD team engages deeply"
-- Scale-up science: "Moving from bench to GMP scale is where a lot of programs stumble — our PD team focuses on de-risking that transition"
+- Scientific collaboration: "We prefer to work as a scientific partner, not just execute a fixed protocol, our PD team engages deeply"
+- Scale-up science: "Moving from bench to GMP scale is where a lot of programs stumble, our PD team focuses on de-risking that transition"
 Pick the angle that matches their specific development stage and molecule type.""",
     },
     'Program / Project Management': {
@@ -229,11 +229,11 @@ Pick the angle that matches their specific development stage and molecule type."
         'Proof Points': 'Dedicated project managers per program, proactive communication style, structured tech transfer process with clear milestones, agile mid-size organization means fast decisions and escalation',
         'Tone': 'Practical and organized. They want to know you will deliver on time and communicate proactively. Show you understand project execution.',
         'What They Dont Want': 'High-level strategy talk, corporate presentations, vague timelines, cost-first arguments. Be specific about HOW you work.',
-        'Example Angles': """- Project structure: "Every program gets a dedicated PM and defined milestone plan — no guessing where things stand"
-- Communication: "We do regular progress updates and flag issues proactively — no surprises"
-- Timelines: "Tech transfer to first GMP batch typically takes X months — we can walk through the milestone plan"
-- Escalation: "As a mid-size organization, escalation paths are short — decisions happen in days, not weeks"
-- Transparency: "We share real-time progress dashboards — you always know where your program stands"
+        'Example Angles': """- Project structure: "Every program gets a dedicated PM and defined milestone plan, no guessing where things stand"
+- Communication: "We do regular progress updates and flag issues proactively, no surprises"
+- Timelines: "Tech transfer to first GMP batch typically takes X months, we can walk through the milestone plan"
+- Escalation: "As a mid-size organization, escalation paths are short, decisions happen in days, not weeks"
+- Transparency: "We share real-time progress dashboards, you always know where your program stands"
 These people are your day-to-day interface. Show them you're easy to work with.""",
     },
     'Finance / Investment': {
@@ -241,10 +241,10 @@ These people are your day-to-day interface. Show them you're easy to work with."
         'Proof Points': 'Lower half of EU cost benchmarks, transparent pricing model, no hidden costs, capital-efficient manufacturing for funded biotechs, competitive COGS for commercial viability',
         'Tone': 'Numbers-focused, ROI-oriented. Finance people want to understand financial impact. Be concrete about cost positioning. They think in spreadsheets.',
         'What They Dont Want': 'Technical jargon, vague "value" claims without numbers, science deep-dives, marketing language. Lead with financial impact.',
-        'Example Angles': """- Cost positioning: "We're in the lower half of EU CDMO cost benchmarks — meaningful savings vs premium CDMOs"
-- Capital efficiency: "For a biotech deploying VC capital, manufacturing is a major line item — getting competitive pricing without sacrificing quality directly impacts runway"
+        'Example Angles': """- Cost positioning: "We're in the lower half of EU CDMO cost benchmarks, meaningful savings vs premium CDMOs"
+- Capital efficiency: "For a biotech deploying VC capital, manufacturing is a major line item, getting competitive pricing without sacrificing quality directly impacts runway"
 - COGS: "Competitive manufacturing COGS strengthens your commercial case and valuation narrative"
-- Predictability: "Our pricing is transparent and predictable — no hidden costs or surprise change orders"
+- Predictability: "Our pricing is transparent and predictable, no hidden costs or surprise change orders"
 - Comparison: "If you benchmark us against Lonza/Samsung/Fujifilm tier, you'll see a significant cost delta for equivalent quality standards"
 This persona responds to concrete numbers and comparisons.""",
     },
@@ -377,7 +377,7 @@ def classify_persona(lead_title: str) -> str:
     
     title_lower = lead_title.lower().strip()
     
-    # Skip unverified titles — these are enrichment artifacts, not real titles
+    # Skip unverified titles, these are enrichment artifacts, not real titles
     unverified_markers = [
         'unable to verify', 'not verified', 'cannot verify', 'could not verify',
         'no verification', 'no record found', 'not found', 'no match found',
@@ -394,7 +394,7 @@ def classify_persona(lead_title: str) -> str:
         for keyword in bucket_info['keywords']:
             # Use word boundary matching for short keywords to avoid false positives
             if len(keyword) <= 4:
-                # Short keywords like 'qa', 'qc', 'cfo', 'cto', 'api' — need boundary
+                # Short keywords like 'qa', 'qc', 'cfo', 'cto', 'api', need boundary
                 if re.search(r'\b' + re.escape(keyword) + r'\b', title_lower):
                     score += 2  # Exact short match is strong signal
             elif keyword in title_lower:
@@ -413,12 +413,12 @@ def load_persona_messaging(base) -> Dict:
     """Load Persona Messaging table from Airtable.
     
     The table should have rows for each persona bucket with columns:
-    - Persona (text) — matches bucket name from PERSONA_BUCKETS
-    - Value Drivers (long text) — what this persona cares about
-    - Proof Points (long text) — Rezon proof points relevant to this persona
-    - Tone (long text) — how to write to this persona
-    - What They Dont Want (long text) — what to avoid
-    - Example Angles (long text) — specific talking point ideas
+    - Persona (text), matches bucket name from PERSONA_BUCKETS
+    - Value Drivers (long text), what this persona cares about
+    - Proof Points (long text), Rezon proof points relevant to this persona
+    - Tone (long text), how to write to this persona
+    - What They Dont Want (long text), what to avoid
+    - Example Angles (long text), specific talking point ideas
     
     Falls back to DEFAULT_PERSONA_MESSAGING if table doesn't exist.
     
@@ -441,10 +441,10 @@ def load_persona_messaging(base) -> Dict:
             logger.info(f"✓ Persona Messaging loaded: {len(messaging)} personas ({', '.join(messaging.keys())})")
             return messaging
         else:
-            logger.info("Persona Messaging table is empty — using defaults")
+            logger.info("Persona Messaging table is empty, using defaults")
             return DEFAULT_PERSONA_MESSAGING
     except Exception as e:
-        logger.debug(f"Could not load Persona Messaging table: {e} — using defaults")
+        logger.debug(f"Could not load Persona Messaging table: {e}, using defaults")
         return DEFAULT_PERSONA_MESSAGING
 
 
@@ -479,7 +479,7 @@ def build_value_proposition(profile: Dict, company_fields: Dict = None,
     Matches Rezon's specific strengths to the prospect's situation based on
     their pipeline stage, funding, technology, geography, and the lead's role.
     
-    The persona messaging is the PRIMARY driver — it determines which value
+    The persona messaging is the PRIMARY driver, it determines which value
     drivers and proof points the AI should lead with. The segment/geography
     data is SECONDARY context.
     
@@ -513,7 +513,7 @@ FDA approved, 95% batch success rate. Quality is uncompromised.
         'EU/US cost leader for New Biological Entities (NBEs)')
     
     # === PERSONA-SPECIFIC ANGLE (PRIMARY) ===
-    # This is the MAIN driver of the message — determines what to lead with
+    # This is the MAIN driver of the message, determines what to lead with
     persona_angle = _match_persona_angle(profile, lead_title, persona_messaging)
     persona_bucket = classify_persona(lead_title)
     
@@ -546,16 +546,49 @@ FDA approved, 95% batch success rate. Quality is uncompromised.
     # === WEAKNESSES / HONESTY ===
     weaknesses = profile.get('Key Weaknesses', '')
     
+    # === COMPANY TYPE / SIZE GUIDANCE ===
+    # The approach should be fundamentally different for big pharma vs small biotech
+    company_size = (safe_fields.get('Company Size', '') or '').lower()
+    company_name = safe_fields.get('Company Name', '')
+    
+    big_pharma_names = ['pfizer', 'merck', 'roche', 'novartis', 'abbvie', 'j&j', 'johnson',
+                        'sanofi', 'astrazeneca', 'gsk', 'lilly', 'eli lilly', 'amgen', 
+                        'gilead', 'bms', 'bristol-myers', 'takeda', 'bayer', 'boehringer']
+    is_big_pharma = any(bp in company_name.lower() for bp in big_pharma_names) or company_size in ['large', 'enterprise']
+    
+    company_type_guidance = ""
+    if is_big_pharma:
+        company_type_guidance = """
+COMPANY TYPE: LARGE PHARMA / BIG BIOTECH
+This is a large company. Adjust your approach accordingly:
+- They have in-house manufacturing. Don't pitch like they NEED you. They're evaluating OPTIONS.
+- Be more humble and self-aware. "You probably have this covered, but..." works better than "We can help you with..."
+- Focus on what makes you an interesting STRATEGIC OPTION: niche molecule expertise, EU cost position as a second source, speed for specific programs
+- Don't oversell your credentials to someone who works at a company 100x your size
+- Keep it shorter. They get 50 pitches a day. Respect their time.
+- NEVER frame Rezon Bio as their primary manufacturing solution. Position as a specialist complement.
+"""
+    elif company_size in ['startup', 'small', 'micro'] or safe_fields.get('Funding Stage', '') in ['Seed', 'Series A', 'Pre-Seed']:
+        company_type_guidance = """
+COMPANY TYPE: EARLY-STAGE BIOTECH
+This is a small/early company. Adjust your approach accordingly:
+- They may be choosing their FIRST CDMO partner. This is a big decision for them.
+- Emphasize that you treat every program as priority (they won't get lost at a big CDMO)
+- Cost efficiency matters a LOT when you're burning through a small fundraise
+- Emphasize that you can scale WITH them (clinical → commercial continuity)
+- Be warmer and more collaborative in tone. They're looking for a partner, not a vendor.
+"""
+    
     # === BUILD THE PROMPT SECTION ===
-    # Persona is PRIMARY — it goes first and determines the message angle.
+    # Persona is PRIMARY, it goes first and determines the message angle.
     # Segment, geography, and proof points are secondary context.
     section = f"""
 ═══════════════════════════════════════════════════════════
 ⚡ CRITICAL: YOUR MESSAGE MUST BE SHAPED BY THIS PERSONA
 ═══════════════════════════════════════════════════════════
 {persona_angle}
-
-YOUR COMPANY — REZON BIO:
+{company_type_guidance}
+YOUR COMPANY, REZON BIO:
 {positioning}
 
 RULES FOR USING THE ABOVE:
@@ -563,9 +596,9 @@ RULES FOR USING THE ABOVE:
 - The REZON BIO section is background context, NOT the default message
 - If the persona says "PPQ experience matters" → lead with PPQ, NOT cost
 - If the persona says "regulatory track record" → lead with FDA/EMA approvals, NOT cost
-- If the persona says "scientific expertise" → lead with CHO platform and molecule experience, NOT Sandoz
+- If the persona says "scientific expertise" → lead with CHO platform and molecule experience, NOT past client names
 - Only use cost/pricing as the lead angle for Procurement, Finance, or C-Level personas
-- NEVER use the same angle (cost + Sandoz + quality) for every persona — this is the #1 mistake
+- NEVER use the same angle (cost + credentials + quality) for every persona, this is the #1 mistake
 
 THEIR STAGE (add context if it sharpens your angle):
 {segment_pitch}
@@ -583,10 +616,10 @@ KEY MESSAGE (pick the one that fits THIS PERSONA best):
 
 ⚠️ SELF-CHECK: Before writing, ask yourself: "Would a {persona_bucket} person 
 actually care about what I'm leading with?" If you're leading with cost for an 
-Operations VP, START OVER. If you're leading with Sandoz for an R&D Director, START OVER.
+Operations VP, START OVER. If you're leading with credentials for an R&D Director, START OVER.
 
-⚠️ HONESTY GUARDRAILS — do NOT overpromise on:
-{weaknesses[:300] if weaknesses else '- We are building our CDMO track record — be authentic about this'}
+⚠️ HONESTY GUARDRAILS, do NOT overpromise on:
+{weaknesses[:300] if weaknesses else '- We are building our CDMO track record, be authentic about this'}
 """
     
     return section
@@ -598,87 +631,112 @@ def build_outreach_philosophy() -> str:
     Based on research into what makes CDMO outreach convert:
     - Lead with THEIR situation, not your capabilities
     - Answer "why should I take this meeting?" from their perspective
-    - Give a SPECIFIC, DIFFERENTIATED reason — not a vague offer
+    - Give a SPECIFIC, DIFFERENTIATED reason, not a vague offer
     - Sound like a real person, not a polished AI
     """
     return """
 ═══════════════════════════════════════════════════════════
-OUTREACH PHILOSOPHY — CRITICAL:
+OUTREACH PHILOSOPHY, CRITICAL:
 ═══════════════════════════════════════════════════════════
 
 Your #1 job: answer "Why should I take this meeting?" from THEIR perspective.
 This means two things: (a) sound like a real human, AND (b) give a SPECIFIC 
 reason why Rezon Bio is interesting to THEM specifically, not just "we're an EU CDMO".
 
-1. OPEN CASUALLY — don't narrate their company back to them
+1. OPEN CASUALLY, don't narrate their company back to them
    
    BAD: "With Merck's expanding oncology portfolio requiring global supply resilience..."
    (Sounds like you copied from their annual report. Presumptuous and stiff.)
    
-   GOOD: "Saw your team's been busy with Phase 3 readouts — exciting times."
+   GOOD: "Saw your team's been busy with Phase 3 readouts, exciting times."
    (Simple. Human. Shows you pay attention without showing off.)
    
    BAD: "I noticed your company has raised a Series B to advance your bispecific pipeline..."
    (Stacking facts to prove you did homework. Feels robotic.)
    
-   GOOD: "Congrats on the pipeline progress — sounds like things are moving fast."
+   GOOD: "Congrats on the pipeline progress, sounds like things are moving fast."
    (Light touch. One reference. Move on to the point.)
 
-2. MAKE THE VALUE PROPOSITION SHARP AND SPECIFIC — this is the core of the message
+2. MAKE THE VALUE PROPOSITION SHARP AND SPECIFIC, this is the core of the message
    The opener should be humble and casual, but the VALUE PROP should be concrete
    and differentiated. Don't water it down to "we're EU-based, might be worth a look."
    
    BAD: "We're an EU-based option that might be worth a look" (so what? There are dozens)
    BAD: "We offer cost-efficient manufacturing" (generic, every CDMO says this)
    
-   GOOD: "We sit in the lower half of EU cost benchmarks but our facilities were 
-   qualified by Sandoz and we hold FDA approvals — so it's pharma-grade quality 
+   GOOD: "We sit in the lower half of EU cost benchmarks but our facilities are 
+   multinational pharma-validated and we hold FDA approvals, so it's pharma-grade quality 
    without the premium CDMO price tag."
    (This answers: why YOU specifically? What makes you DIFFERENT from other EU CDMOs?)
    
    GOOD: "Most EU CDMOs either charge a premium or cut corners. We managed to get 
    to competitive pricing while keeping a 95% batch success rate and multinational 
-   pharma validation — that's the bit that's hard to find."
+   pharma validation. That's the bit that's hard to find."
    (Positions against the category, explains WHY the cost is interesting.)
    
    The key: casual opener + sharp value prop. Humble about how you open,
    confident about what you actually bring to the table.
 
 3. ONE PROOF POINT, WOVEN IN NATURALLY
-   BAD: "We have FDA/EMA approval, Sandoz qualification, state-of-art facilities, 2000L bioreactors..."
-   GOOD: "Sandoz qualified our facilities early on, so the regulatory groundwork is done"
+   BAD: "We have FDA/EMA approval, multinational pharma qualification, state-of-art facilities, 2000L bioreactors..."
+   GOOD: "Our facilities were qualified to multinational pharma standards, so the regulatory groundwork is done"
    (Casual delivery of a strong credential. Don't stack multiple proof points.)
 
 4. TIMELINE HOOK > GENERIC PROBLEM HOOK
    BAD: "Are you facing manufacturing challenges?"
    GOOD: "With Phase 3 coming up, manufacturing timelines start to get very real"
 
-5. LOW-BARRIER CTA — suggest a conversation, not a pitch
+5. LOW-BARRIER CTA, suggest a conversation, not a pitch
    BAD: "Can we schedule a 60-minute capabilities review?"
    BAD: "Would it make sense to compare notes on EU supply chain strategies?" (consultant-speak)
-   GOOD: "Happy to chat if useful — no agenda, just a conversation."
+   GOOD: "Happy to chat if useful, no agenda, just a conversation."
    GOOD: "Would a quick call make sense? Even 15 minutes to see if there's a fit."
 
 ═══════════════════════════════════════════════════════════
 STYLE RULES:
 ═══════════════════════════════════════════════════════════
-- The OPENER should be casual and human — slightly humble, not over-polished
-- The VALUE PROP should be specific and confident — this is where you earn the meeting
+- The OPENER should be casual and human, slightly humble, not over-polished
+- The VALUE PROP should be specific and confident, this is where you earn the meeting
 - Combination: "Hey, noticed [light reference]. [Sharp, specific reason Rezon is different]. [Easy CTA]."
 - Write like a real person typing an email, not a marketing team crafting copy
-- NO bullet lists — weave points into sentences
-- NO **bold** markup — clean formatting only
-- DON'T over-demonstrate your research — one light reference is enough
+- NO bullet lists, weave points into sentences
+- NO **bold** markup, clean formatting only
+- ABSOLUTELY NO EM-DASHES (, ). This is a HARD rule. Never use the, character anywhere 
+  in any message. Use commas, periods, or "and" instead. Every em-dash is a failure.
+  BAD: "mid-size CDMO that treats every program as priority, not just another project"
+  GOOD: "mid-size CDMO that treats every program as priority, not just another project"
+- DON'T over-demonstrate your research, one light reference is enough
   BAD: "With your company's recent Series C and three programs advancing into late-stage..."
-  GOOD: "Saw your Phase 3 news — congrats."
+  GOOD: "Saw your Phase 3 news, congrats."  → actually: "Saw your Phase 3 news, congrats."
 - NEVER mention specific funding amounts or rounds
 - NEVER claim specific pipeline stages unless provided as verified
 - NEVER mention CDMO partnerships or manufacturing decisions
-- NEVER claim we compete with APAC on cost — we don't. Our positioning is best cost-for-value IN THE EU.
-- NEVER use "cost-competitive with APAC/Asia" or similar — this is factually wrong
+- NEVER claim we compete with APAC on cost, we don't. Our positioning is best cost-for-value IN THE EU.
+- NEVER use "cost-competitive with APAC/Asia" or similar, this is factually wrong
 
 ═══════════════════════════════════════════════════════════
-BANNED PHRASES — classic AI signatures, never use these:
+OPENER RULES, CRITICAL:
+═══════════════════════════════════════════════════════════
+DON'T start with clipped "busy and important" phrasing. Write complete, natural sentences 
+like a normal person would. The opening should feel humble and sincere, not punchy and polished.
+
+BAD OPENERS (too clipped, sound like a pitch):
+- "Heading to DCAT next week and noticed..."
+- "Saw Glycomantra's progress on GM101..."
+- "Noticed your team expanding into biologics..."
+- "Attending Festival of Biologics and..."
+
+GOOD OPENERS (natural, humble, complete sentences):
+- "I'll be at DCAT next month and was looking into who else is attending."
+- "I came across Glycomantra recently and your progress on GM101 looks really promising."
+- "I noticed your team has been expanding into biologics, which caught my attention."
+- "We're attending the Festival of Biologics in March and I thought it would be good to reach out beforehand."
+
+The pattern: write full sentences with "I" as subject. Don't drop pronouns or articles 
+to sound punchy. Humble > cool. Sincere > slick.
+
+═══════════════════════════════════════════════════════════
+BANNED PHRASES, classic AI signatures, never use these:
 ═══════════════════════════════════════════════════════════
 These phrases instantly signal the message was AI-generated. NEVER use them:
 - "I hope this message finds you well"
@@ -701,19 +759,39 @@ These phrases instantly signal the message was AI-generated. NEVER use them:
 - "Seamless" / "Seamlessly"
 - "Circle back" / "Touch base"
 - "Deep dive" (in outreach context)
-- "I imagine" (as opener — presumptuous)
+- "I imagine" (as opener, presumptuous)
 - "Increasingly complex" / "Expanding portfolio"
 - "Supply resilience" / "Dual sourcing strategy"
 - "Compare notes on [buzzword] strategies"
 - "Discuss alignment" / "Explore alignment"
 
+BANNED FORMATTING:
+- The em-dash character (, ) is ABSOLUTELY FORBIDDEN in any message. 
+  Use commas, periods, semicolons, or the word "and" instead. Zero tolerance.
+
+BANNED OPENER PATTERNS (sound robotic and clipped):
+- Starting with a verb without "I": "Heading to...", "Attending...", "Noticed..."
+- "Saw [Company]'s progress on..." (too forward, sounds like a pitch)
+- "Saw you're..." as the very first words
+- Any opener that drops the subject pronoun to sound punchy
+
 Instead, write like you'd actually talk to someone at a conference bar.
 
-Words/phrases that WORK: "noticed", "seems like", "might be worth", "happy to chat",
-"if it's useful", "curious whether", "no pressure", "even 15 minutes"
+Words/phrases that WORK: "noticed", "seems like", "might be worth", "curious whether",
+"no pressure", "if it helps"
+
+Words/phrases that are BANNED because they've become template signatures:
+- "even just a quick conversation" / "even 15 minutes to see if..."
+- "happy to grab coffee between sessions"
+- "happy to chat if useful"
+- "feel free to swing by" / "swing by our booth" / "stop by and say hello"
+- "has worked through the specific challenges that come with..."
+- "what's interesting is..."
+- "would be great to meet if you're attending"
+- "tends to matter a lot" / "tends to get the attention of"
 
 ═══════════════════════════════════════════════════════════
-ANTI-REPETITION — CRITICAL RULE:
+ANTI-REPETITION, CRITICAL RULE:
 ═══════════════════════════════════════════════════════════
 If two recipients at the same company compared messages, they should NOT look
 like the same template with names swapped. Each message must feel individually
@@ -724,11 +802,11 @@ RULE 1: Pick ONE proof point per message. Not two, not three. ONE.
   - An R&D person gets: CHO platform depth or analytical capabilities  
   - A Procurement person gets: cost positioning or supply reliability
   - A C-level gets: strategic fit or partner agility
-  They should NEVER all get "Sandoz + cost + batch success rate" — that's lazy.
+  They should NEVER all get "credentials + cost + batch success rate", that's lazy.
 
 RULE 2: Vary your sentence structures across messages.
   - DON'T always write "We sit in the lower half of EU cost benchmarks while maintaining..."
-  - DON'T always write "Our facilities were qualified by Sandoz"  
+  - DON'T always write "Our facilities were qualified by a multinational pharma company"  
   - DON'T always write "pharma-grade quality without the premium price tag"
   - These phrases must NOT appear in every message. Rewrite the same idea in fresh words.
 
@@ -743,6 +821,27 @@ RULE 3: The value prop paragraph must match the PERSONA's priorities.
 RULE 4: The opening line must be genuinely different per person.
   - Reference something specific to THEIR work, not just "Saw you're a DCAT member"
   - If you can't find something specific, at least vary the opener structure
+
+RULE 5: The CTA must vary across messages. NEVER reuse the same call-to-action.
+  DON'T always say: "We're at booth 309, or happy to grab coffee between sessions."
+  DON'T always say: "Even 15 minutes to see if there's a fit."
+  DON'T always say: "Happy to chat if useful."
+  
+  Vary CTAs like a human would:
+  - "I'd be curious to hear how you're thinking about manufacturing for [molecule]."
+  - "If you're around on Tuesday, I could come find you."
+  - "Let me know if you'd like to connect, no agenda."
+  - "We're around all day Wednesday if timing works."
+  - Sometimes just end with "hope to see you there." and nothing more.
+
+RULE 6: The message STRUCTURE must vary, not just the words.
+  DON'T always follow: [opener about them] > [we'll be at event] > [our capability paragraph] > [CTA]
+  
+  Try different structures:
+  - Lead with the conference, then connect to their work
+  - Open with a genuine question about their approach
+  - Start with a shared challenge in their space, then offer to discuss
+  - Sometimes the shortest message is the best one
 """
 
 
@@ -766,7 +865,7 @@ def _match_segment_pitch(profile: Dict, company_fields: Dict) -> str:
     segments = []
     
     if any(x in pipeline_str for x in ['phase 3', 'phase iii', 'commercial', 'marketed', 'approved']):
-        segments.append("LATE-STAGE / COMMERCIAL: Fast tech transfer, competitive commercial pricing, reliable batch execution. They need a manufacturing partner who delivers on timeline and cost — validated by multinational pharma, not just another mid-tier CDMO.")
+        segments.append("LATE-STAGE / COMMERCIAL: Fast tech transfer, competitive commercial pricing, reliable batch execution. They need a manufacturing partner who delivers on timeline and cost, validated by multinational pharma, not just another mid-tier CDMO.")
     
     if any(x in pipeline_str for x in ['phase 2', 'phase ii', 'phase 1', 'phase i', 'clinical']):
         segments.append("CLINICAL STAGE: Cost-efficient clinical supply + scaling expertise. They need a partner who can grow with them from clinical through commercial without switching CDMOs. Our cost structure means their runway stretches further.")
@@ -775,11 +874,11 @@ def _match_segment_pitch(profile: Dict, company_fields: Dict) -> str:
         segments.append("FUNDED & SCALING: They have capital to deploy efficiently. Our position in the lower half of EU cost benchmarks means they get pharma-grade quality without overpaying for a premium CDMO brand name.")
     
     if not segments:
-        # Default — pull from Company Profile if available
+        # Default, pull from Company Profile if available
         if segment_messaging:
             segments.append(f"GENERAL:\n{segment_messaging[:400]}")
         else:
-            segments.append("GENERAL: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Agile mid-size partner, not a bureaucratic big CDMO.")
+            segments.append("GENERAL: Best cost-for-value in the EU, lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Agile mid-size partner, not a bureaucratic big CDMO.")
     
     return '\n'.join(segments)
 
@@ -810,7 +909,7 @@ def _match_persona_angle(profile: Dict, lead_title: str,
         msg = DEFAULT_PERSONA_MESSAGING.get('C-Level / Owner', {})
     
     value_drivers = msg.get('Value Drivers', 'Strategic fit, reliability, quality')
-    proof_points = msg.get('Proof Points', 'Sandoz-qualified, FDA approved, 95% batch success rate')
+    proof_points = msg.get('Proof Points', 'Multinational pharma-validated, FDA approved, 95% batch success rate')
     tone = msg.get('Tone', 'Professional and direct')
     dont_want = msg.get('What They Dont Want', 'Marketing fluff, overpromising')
     example_angles = msg.get('Example Angles', '')
@@ -818,7 +917,7 @@ def _match_persona_angle(profile: Dict, lead_title: str,
     section = f"""PERSONA: {persona.upper()}
 Lead title: {lead_title}
 
-WHAT THIS PERSON VALUES — shape your message around THESE (not generic cost/Sandoz talking points):
+WHAT THIS PERSON VALUES, shape your message around THESE (not generic cost/credential talking points):
 {value_drivers}
 
 PROOF POINTS TO USE FOR THIS PERSONA (pick the 1-2 most relevant):
@@ -848,7 +947,7 @@ def _select_proof_points(profile: Dict, company_fields: Dict,
     which strengths to lead with based on the persona. The persona messaging
     'Proof Points' field determines the priority order.
     
-    This replaces the old hardcoded proof point pool — everything now comes
+    This replaces the old hardcoded proof point pool, everything now comes
     from your Company Profile table in Airtable.
     
     Args:
@@ -965,18 +1064,18 @@ def _match_pain_points(profile: Dict, company_fields: Dict) -> str:
     pain_points = []
     
     if any(x in location for x in ['us', 'united states', 'america']):
-        pain_points.append("US biotechs often overpay for manufacturing — EU-based CDMOs like Rezon can offer the same quality at a significantly lower cost point")
+        pain_points.append("US biotechs often overpay for manufacturing, EU-based CDMOs like Rezon can offer the same quality at a significantly lower cost point")
     
     if any(x in location for x in ['europ', 'germany', 'france', 'uk', 'swiss']):
         pain_points.append("EU biotechs benefit from an EU-based CDMO: regulatory alignment, proximity, and no cross-border complexity for EMA filings")
     
     if 'no public partner' in mfg_status or 'no partner' in mfg_status:
-        pain_points.append("They likely don't have a manufacturing partner yet — first-mover opportunity to become their CDMO of choice")
+        pain_points.append("They likely don't have a manufacturing partner yet, first-mover opportunity to become their CDMO of choice")
     elif 'has partner' in mfg_status:
-        pain_points.append("They have a partner but may be looking for alternatives or second source — approach as complementary option")
+        pain_points.append("They have a partner but may be looking for alternatives or second source, approach as complementary option")
     
     if not pain_points:
-        pain_points.append("Mid-size biotechs often get deprioritized by large CDMOs — Rezon offers the attention and agility of a mid-size partner with pharma-validated quality")
+        pain_points.append("Mid-size biotechs often get deprioritized by large CDMOs, Rezon offers the attention and agility of a mid-size partner with pharma-validated quality")
     
     return "THEIR LIKELY PAIN POINTS (reference indirectly, don't state them bluntly):\n" + '\n'.join(f"- {pp}" for pp in pain_points[:2])
 
@@ -1002,33 +1101,75 @@ def _match_differentiation(diff_text: str, company_fields: Dict) -> str:
     
     # Fallback differentiation based on geography
     if any(x in location for x in ['us', 'united states', 'america']):
-        return "VS. US CDMOs: Lower half of EU cost benchmarks — significantly cheaper than US manufacturing for equivalent pharma-validated quality. FDA approved, so dual filing is straightforward."
+        return "VS. US CDMOs: Lower half of EU cost benchmarks, significantly cheaper than US manufacturing for equivalent pharma-validated quality. FDA approved, so dual filing is straightforward."
     
     if any(x in location for x in ['switzerland', 'germany', 'france', 'uk', 'netherlands', 'belgium']):
         return "VS. Premium EU CDMOs (Lonza, Samsung, Fujifilm): Same pharma-grade quality, but lower half of cost benchmarks. Faster decision-making, more personalized service, no 'small fish in a big pond' problem."
     
-    return "KEY DIFFERENTIATOR: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Quality is uncompromised; it's the overhead and pricing model that's different."
+    return "KEY DIFFERENTIATOR: Best cost-for-value in the EU, lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Quality is uncompromised; it's the overhead and pricing model that's different."
 
 
 # =========================================================================
-# INLINE QUALITY CHECK — runs at generation time, no API call needed
+# INLINE QUALITY CHECK, runs at generation time, no API call needed
 # =========================================================================
 
 # Phrases that indicate recycled/template messages
 OVERUSED_PHRASES = [
+    # Cost/quality cliches
     'we sit in the lower half of eu cost benchmarks while maintaining',
     'pharma-grade quality without the premium price tag',
-    'our facilities were qualified by sandoz',
+    'our facilities were qualified by a multinational pharma company',
     'quality without cutting corners',
     'pharma-validated quality at competitive pricing',
     'without compromising on quality',
     'best-in-class quality at competitive cost',
+    'without compromising quality',
+    'scientific rigor without the premium',
+    'without paying premium cdmo prices',
+    
+    # Template CTA phrases
+    'even just a quick conversation',
+    'even 15 minutes to see if there\'s',
+    'even a quick conversation',
+    'even a quick chat',
+    'happy to grab coffee between sessions',
+    'happy to chat if useful',
+    'feel free to swing by',
+    'want to swing by',
+    'swing by our booth',
+    'stop by and say hello',
+    'or happy to grab coffee',
+    
+    # Template capability phrases
+    'has worked through the specific challenges that come with',
+    'has worked through the specific challenges',
+    'the specific challenges that come with',
+    'worked through similar challenges',
+    'what\'s interesting is',
+    'tends to matter a lot',
+    'tends to get the attention',
+    'tends to streamline',
+    
+    # Template structural patterns
+    'our process development team has worked through',
+    'our process development team has built',
+    'our cho platform team has worked through',
+    'our pd team has worked through',
+    'our analytical team works closely with pd',
+    'we\'ve worked through the analytical challenges',
+    
+    # Template opener recycling
+    'would be great to meet if you\'re attending',
+    'would be great to chat if you\'re attending',
+    'would be great to meet at the conference',
+    'would be great to connect',
+    'would be great to meet in person',
 ]
 
 # Phrases that should NOT lead the message for certain personas
 PERSONA_MISMATCH_RULES = {
     'R&D / Scientific': {
-        'should_not_lead_with': ['cost', 'pricing', 'benchmark', 'cheaper', 'savings', 'sandoz'],
+        'should_not_lead_with': ['cost', 'pricing', 'benchmark', 'cheaper', 'savings'],
         'should_contain_any': ['process', 'development', 'analytical', 'cell line', 'cho', 'molecule',
                                'formulation', 'characterization', 'scale-up', 'assay', 'clone'],
     },
@@ -1057,7 +1198,7 @@ PERSONA_MISMATCH_RULES = {
 
 def inline_quality_check(messages: Dict[str, str], persona: str = 'General',
                           lead_name: str = '', company_name: str = '') -> Dict:
-    """Fast structural quality check — no API call, runs at generation time.
+    """Fast structural quality check, no API call, runs at generation time.
     
     Catches the most common quality issues:
     - Overused/recycled phrases (template smell)
@@ -1112,13 +1253,13 @@ def inline_quality_check(messages: Dict[str, str], persona: str = 'General',
         email_opening = email_body[:200] if email_body else all_text[:200]
         bad_leads = [w for w in rules['should_not_lead_with'] if w in email_opening]
         if bad_leads:
-            issues.append(f"PERSONA MISMATCH: Email opens with {'/'.join(bad_leads)} topics — wrong for {persona} persona")
+            issues.append(f"PERSONA MISMATCH: Email opens with {'/'.join(bad_leads)} topics, wrong for {persona} persona")
             score -= 15
         
         # Check if ANY relevant terms appear anywhere
         has_relevant = any(term in all_text for term in rules['should_contain_any'])
         if not has_relevant:
-            issues.append(f"PERSONA MISMATCH: No {persona}-relevant terms found in any message — messages aren't tailored to their role")
+            issues.append(f"PERSONA MISMATCH: No {persona}-relevant terms found in any message, messages aren't tailored to their role")
             score -= 20
     
     # === CHECK 3: Length violations ===
@@ -1167,19 +1308,55 @@ def inline_quality_check(messages: Dict[str, str], persona: str = 'General',
         if email_words and inmail_words:
             overlap = len(email_words & inmail_words) / min(len(email_words), len(inmail_words))
             if overlap > 0.75:
-                issues.append(f"EMAIL/INMAIL TOO SIMILAR: {overlap:.0%} word overlap — these should be different messages with different angles")
+                issues.append(f"EMAIL/INMAIL TOO SIMILAR: {overlap:.0%} word overlap, these should be different messages with different angles")
                 score -= 15
     
     # === CHECK 6: Multiple proof points crammed in ===
-    proof_point_signals = ['sandoz', '95% batch', 'fda', 'ema', 'anvisa', 'lower half', 'cost benchmark']
+    proof_point_signals = ['95% batch', 'fda', 'ema', 'anvisa', 'lower half', 'cost benchmark']
     if email_body:
         proof_count = sum(1 for signal in proof_point_signals if signal in email_body)
         if proof_count >= 4:
-            issues.append(f"TOO MANY PROOF POINTS: Email contains {proof_count} proof points — should be ONE per message")
+            issues.append(f"TOO MANY PROOF POINTS: Email contains {proof_count} proof points, should be ONE per message")
             score -= 15
         elif proof_count == 3:
-            issues.append(f"PROOF POINT STUFFING: Email contains {proof_count} proof points — aim for ONE, maximum two")
+            issues.append(f"PROOF POINT STUFFING: Email contains {proof_count} proof points, aim for ONE, maximum two")
             score -= 8
+    
+    # === CHECK 7: Em-dash detection (HARD BAN) ===
+    # Check all message values for the em-dash character
+    em_dash_count = 0
+    for key, val in messages.items():
+        if val and isinstance(val, str) and '\u2014' in val:
+            em_dash_count += val.count('\u2014')
+    if em_dash_count > 0:
+        issues.append(f"EM-DASH VIOLATION: Found {em_dash_count} em-dash(es) in messages. Em-dashes are BANNED. Use commas, periods, or 'and' instead.")
+        score -= 15  # Hard penalty
+    
+    # === CHECK 8: Clipped opener detection ===
+    # Check if email starts with a verb without "I" (punchy/robotic pattern)
+    if email_body:
+        # Get first sentence/line of the email (after "Hi Name," greeting)
+        email_lines = [l.strip() for l in messages.get('email_body', messages.get('Email Body', '')).strip().split('\n') if l.strip()]
+        opener_line = ''
+        for line in email_lines:
+            # Skip greeting line
+            if line.lower().startswith(('hi ', 'hello ', 'dear ')):
+                continue
+            opener_line = line
+            break
+        
+        if opener_line:
+            clipped_starters = [
+                'heading to', 'attending', 'noticed your', 'noticed you',
+                'saw your', 'saw you', 'saw that', 'looking at',
+                'preparing for', 'getting ready for',
+            ]
+            opener_lower = opener_line.lower()
+            for starter in clipped_starters:
+                if opener_lower.startswith(starter):
+                    issues.append(f"CLIPPED OPENER: Message starts with '{starter}...' which sounds robotic. Write a full sentence starting with 'I' as subject.")
+                    score -= 10
+                    break
     
     # Clamp score
     score = max(0, min(100, score))
@@ -1187,7 +1364,7 @@ def inline_quality_check(messages: Dict[str, str], persona: str = 'General',
     # Build feedback for regeneration prompt
     feedback = ''
     if issues:
-        feedback = "QUALITY CHECK FAILED — FIX THESE ISSUES:\n"
+        feedback = "QUALITY CHECK FAILED, FIX THESE ISSUES:\n"
         for issue in issues:
             feedback += f"- {issue}\n"
         feedback += f"\nQuality score: {score}/100. Target: 85+.\n"
@@ -1250,7 +1427,7 @@ def validate_and_retry(messages: Dict[str, str],
         logger.debug(f"  ✓ Quality check passed: {result['score']}/100")
         return messages, result
     
-    # Failed — try regeneration
+    # Failed, try regeneration
     logger.info(f"  ⚠ Quality check failed ({result['score']}/100): {'; '.join(result['issues'][:3])}")
     
     for attempt in range(max_retries):
@@ -1288,7 +1465,7 @@ def full_validate_outreach(anthropic_client, model: str, messages: Dict[str, str
                             context: Dict, source_type: str = "general") -> Dict:
     """Full AI-powered validation with web search fact-checking.
     
-    Standalone function — no class needed. Any generator can call this
+    Standalone function, no class needed. Any generator can call this
     right after generating messages, before writing to Airtable.
     
     Args:
@@ -1368,6 +1545,8 @@ TRIGGER INFORMATION:
 CAMPAIGN INFORMATION:
 - Campaign Type: {context.get('campaign_type', 'Campaign Lead List')}
 - Campaign Name: {context.get('campaign_name', 'N/A')}
+- Event Date: {context.get('campaign_date', context.get('event_date', 'N/A'))}
+- Today's Date: {datetime.now().strftime('%Y-%m-%d')}
 """
     
     # Do-not-flag rules
@@ -1406,11 +1585,13 @@ OUTREACH MESSAGES TO VALIDATE:
 IMPORTANT: Lead's name, title, and company are ALREADY VERIFIED. Do NOT mark these as issues.
 
 VALIDATION TASKS:
-1. Check specific claims (funding amounts, pipeline stages, partnerships, recent news) — are they accurate?
-2. Detect outdated information — has anything changed recently?
-3. Check for hallucinations — fabricated or unverifiable statements?
+1. Check specific claims (funding amounts, pipeline stages, partnerships, recent news), are they accurate?
+2. Detect outdated information, has anything changed recently?
+3. Check for hallucinations, fabricated or unverifiable statements?
 4. Tone & appropriateness for recipient's seniority and industry
 5. Factual accuracy of any specific facts mentioned
+6. FORMATTING: Check for em-dash characters (, ). If ANY em-dash is found, flag it as an issue and deduct 10 points. Em-dashes are strictly banned.
+7. TIMING: If the message references a conference or event, check that the relative timing ("next week", "next month", "in March") is plausible given today's date ({datetime.now().strftime('%Y-%m-%d')}). If a conference date is mentioned in the context above, verify the message uses correct timing.
 
 {do_not_flag}
 
@@ -1562,7 +1743,7 @@ def generate_validate_loop(anthropic_client, model: str,
         logger.info(f"  Structural: {structural['score']}/100 | Validation: {val_score}/100 ({validation.get('validity_rating', '?')})")
         
         if val_score >= validation_threshold:
-            # Good enough — return
+            # Good enough, return
             return messages, {
                 'structural_score': structural['score'],
                 'validation_score': val_score,
@@ -1573,7 +1754,7 @@ def generate_validate_loop(anthropic_client, model: str,
                 'validated_at': validation.get('validated_at')
             }
         
-        # Validation failed — build feedback for next attempt
+        # Validation failed, build feedback for next attempt
         issues = validation.get('issues_found', [])
         suggested = validation.get('suggested_edits', '')
         recommendation = validation.get('recommendation', '')
@@ -1610,4 +1791,53 @@ def generate_validate_loop(anthropic_client, model: str,
         'suggested_edits': validation.get('suggested_edits'),
         'passed': False,
         'validated_at': validation.get('validated_at', datetime.now().isoformat())
+    }
+
+
+def validation_fields_for_airtable(quality: Dict) -> Dict:
+    """Convert generate_validate_loop quality result into Airtable fields.
+    
+    Call this after generate_validate_loop and merge the returned dict 
+    into your Airtable update_fields dict.
+    
+    Args:
+        quality: The quality dict returned by generate_validate_loop
+        
+    Returns:
+        Dict with the 4 standard Airtable validation fields:
+        - Outreach Validity Rating
+        - Outreach Validity Score
+        - Outreach Validation Notes
+        - Outreach Validated At
+    """
+    # Format issues into readable notes
+    notes_parts = []
+    issues = quality.get('issues', [])
+    if issues:
+        notes_parts.append("⚠️ ISSUES:")
+        for issue in issues[:8]:
+            notes_parts.append(f"  • {issue}")
+    
+    suggested = quality.get('suggested_edits')
+    if suggested:
+        notes_parts.append(f"\n✏️ EDITS: {suggested}")
+    
+    structural = quality.get('structural_score')
+    if structural is not None:
+        notes_parts.append(f"\n📊 Structural: {structural}/100 | Validation: {quality.get('validation_score', 0)}/100")
+    
+    notes = "\n".join(notes_parts) if notes_parts else "✓ Passed validation"
+    
+    validated_at = quality.get('validated_at', '')
+    if validated_at and 'T' in validated_at:
+        # Convert ISO to date-only for Airtable date field
+        validated_at = validated_at.split('T')[0]
+    elif not validated_at:
+        validated_at = datetime.now().strftime('%Y-%m-%d')
+    
+    return {
+        'Outreach Validity Rating': quality.get('validation_rating', 'LOW'),
+        'Outreach Validity Score': quality.get('validation_score', 0),
+        'Outreach Validation Notes': notes[:2000],  # Airtable long text limit safety
+        'Outreach Validated At': validated_at,
     }
