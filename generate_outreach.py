@@ -14,7 +14,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import anthropic
 from pyairtable import Api
-from company_profile_utils import build_outreach_philosophy
+from company_profile_utils import (build_outreach_philosophy, build_value_proposition, 
+                                   load_company_profile, load_persona_messaging)
 
 # Configure logging
 logging.basicConfig(
@@ -51,6 +52,9 @@ class OutreachGenerator:
             self.company_profile_table = None
             self.company_profile = None
             logger.info("Note: Company Profile table not found - using generic messaging")
+        
+        # Load persona messaging for persona-driven proof point selection
+        self.persona_messaging = load_persona_messaging(self.base)
         
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
@@ -143,30 +147,14 @@ ACTIVE TRIGGER EVENTS:
 {trigger_events}
 """
         
-        # Add OUR company profile for strategic positioning
-        our_profile_section = ""
-        if self.company_profile:
-            our_profile_section = f"""
-YOUR COMPANY PROFILE (Rezon Bio):
-Positioning: {self.company_profile.get('Positioning Statement', '')[:500]}
-
-Key Strengths to Emphasize:
-{self.company_profile.get('Key Strengths', '')[:1000]}
-
-Differentiation:
-{self.company_profile.get('Differentiation vs Competitors', '')[:800]}
-
-Key Messaging Themes:
-{self.company_profile.get('Key Messaging Themes', '')[:800]}
-
-Buyer Persona Insights:
-{self.company_profile.get('Target Buyer Personas', '')[:800]}
-
-IMPORTANT - Be Honest About Limitations:
-{self.company_profile.get('Key Weaknesses', '')[:500]}
-
-DO NOT overpromise on areas where we're still building capability.
-"""
+        # Add OUR company profile — uses shared value proposition builder
+        # that pulls from Company Profile table and matches to persona
+        our_profile_section = build_value_proposition(
+            self.company_profile or {}, 
+            company_context or {},
+            title,
+            persona_messaging=self.persona_messaging
+        )
         
         outreach_prompt = f"""You are an expert business development writer specializing in personalized, authentic outreach to pharma/biotech executives.
 
