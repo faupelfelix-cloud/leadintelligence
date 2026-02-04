@@ -16,7 +16,9 @@ from typing import Dict, List, Optional
 import anthropic
 from pyairtable import Api
 from company_profile_utils import (build_outreach_philosophy, build_value_proposition,
-                                   load_company_profile, load_persona_messaging)
+                                   load_company_profile, load_persona_messaging,
+                                   inline_quality_check, validate_and_retry,
+                                   full_validate_outreach, generate_validate_loop)
 
 # Configure logging
 logging.basicConfig(
@@ -404,7 +406,43 @@ Only return valid JSON, no other text."""
             result_text = re.sub(r',(\s*[}\]])', r'\1', result_text)
             
             messages_data = json.loads(result_text)
-            logger.info(f"  Messages generated successfully")
+            
+            # Full validation loop: structural + web search + auto-regen
+            lead_title = lead_context.get('title', '')
+            lead_name = lead_context.get('name', '')
+            company_name = lead_context.get('company_name', '')
+            persona = classify_persona(lead_title)
+            
+            def gen_fn(feedback=None):
+                regen_prompt = prompt + (f"\n\n{feedback}" if feedback else "")
+                msg = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'], max_tokens=2000,
+                    messages=[{"role": "user", "content": regen_prompt}]
+                )
+                rt = "".join(b.text for b in msg.content if hasattr(b, 'text')).strip()
+                if not rt.startswith("{"):
+                    s = rt.find("{"); e = rt.rfind("}")
+                    if s != -1: rt = rt[s:e+1]
+                rt = re.sub(r',(\s*[}\]])', r'\1', rt)
+                return json.loads(rt)
+            
+            val_context = {
+                'lead_name': lead_name, 'lead_title': lead_title,
+                'company_name': company_name,
+                'company_data': lead_context.get('company_data', {}),
+                'trigger_type': lead_context.get('trigger_type', ''),
+                'trigger_description': lead_context.get('trigger_description', ''),
+            }
+            
+            messages_data, quality = generate_validate_loop(
+                self.anthropic_client, self.config['anthropic']['model'],
+                gen_fn, val_context, persona=persona, source_type='trigger',
+                pre_generated=messages_data
+            )
+            
+            vs = quality.get('validation_score', 0)
+            vr = quality.get('validation_rating', '?')
+            logger.info(f"  Messages generated (validation: {vs}/100 {vr})")
             return messages_data
             
         except json.JSONDecodeError as e:
@@ -486,6 +524,8 @@ Only return valid JSON, no other text."""
                     logger.error(f"  Generation failed")
                     failed_count += 1
                     continue
+                
+                # Validation already done inside generate_trigger_outreach via generate_validate_loop
                 
                 # Save to trigger record
                 if self.update_trigger_with_outreach(record_id, messages_data):
