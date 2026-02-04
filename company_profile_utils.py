@@ -1008,3 +1008,606 @@ def _match_differentiation(diff_text: str, company_fields: Dict) -> str:
         return "VS. Premium EU CDMOs (Lonza, Samsung, Fujifilm): Same pharma-grade quality, but lower half of cost benchmarks. Faster decision-making, more personalized service, no 'small fish in a big pond' problem."
     
     return "KEY DIFFERENTIATOR: Best cost-for-value in the EU — lower half of cost benchmarks, yet multinational pharma validated, FDA approved, 95% batch success rate. Quality is uncompromised; it's the overhead and pricing model that's different."
+
+
+# =========================================================================
+# INLINE QUALITY CHECK — runs at generation time, no API call needed
+# =========================================================================
+
+# Phrases that indicate recycled/template messages
+OVERUSED_PHRASES = [
+    'we sit in the lower half of eu cost benchmarks while maintaining',
+    'pharma-grade quality without the premium price tag',
+    'our facilities were qualified by sandoz',
+    'quality without cutting corners',
+    'pharma-validated quality at competitive pricing',
+    'without compromising on quality',
+    'best-in-class quality at competitive cost',
+]
+
+# Phrases that should NOT lead the message for certain personas
+PERSONA_MISMATCH_RULES = {
+    'R&D / Scientific': {
+        'should_not_lead_with': ['cost', 'pricing', 'benchmark', 'cheaper', 'savings', 'sandoz'],
+        'should_contain_any': ['process', 'development', 'analytical', 'cell line', 'cho', 'molecule',
+                               'formulation', 'characterization', 'scale-up', 'assay', 'clone'],
+    },
+    'Operations / Manufacturing': {
+        'should_not_lead_with': ['cost', 'pricing', 'cheaper', 'savings'],
+        'should_contain_any': ['batch', 'tech transfer', 'ppq', 'gmp', 'bioreactor', 'manufacturing',
+                               'facility', 'campaign', 'scale', 'process', 'execution', 'validation'],
+    },
+    'Quality / Regulatory': {
+        'should_not_lead_with': ['cost', 'pricing', 'cheaper', 'savings', 'agile'],
+        'should_contain_any': ['fda', 'ema', 'regulatory', 'quality', 'approval', 'inspection',
+                               'gmp', 'compliance', 'audit', 'documentation', 'capa', 'deviation'],
+    },
+    'Supply Chain / Procurement': {
+        'should_not_lead_with': ['cho', 'cell line', 'analytical', 'science', 'r&d'],
+        'should_contain_any': ['cost', 'capacity', 'pricing', 'supply', 'sourcing', 'lead time',
+                               'reliability', 'benchmark', 'budget', 'commercial', 'competitive'],
+    },
+    'Finance / Investment': {
+        'should_not_lead_with': ['cho', 'cell line', 'analytical', 'ppq', 'tech transfer'],
+        'should_contain_any': ['cost', 'capital', 'pricing', 'cogs', 'runway', 'budget', 'valuation',
+                               'financial', 'efficient', 'savings', 'roi', 'benchmark'],
+    },
+}
+
+
+def inline_quality_check(messages: Dict[str, str], persona: str = 'General',
+                          lead_name: str = '', company_name: str = '') -> Dict:
+    """Fast structural quality check — no API call, runs at generation time.
+    
+    Catches the most common quality issues:
+    - Overused/recycled phrases (template smell)
+    - Persona mismatch (R&D lead getting cost-first pitch)
+    - Length violations
+    - Missing personalization
+    - All messages looking identical
+    
+    Returns:
+        {
+            'passed': bool,
+            'score': int (0-100),
+            'issues': list of strings describing problems,
+            'feedback_for_regen': str (formatted for injection into regen prompt)
+        }
+    """
+    issues = []
+    score = 100
+    
+    # Combine all message text for analysis
+    all_text = ' '.join(v for v in messages.values() if v and isinstance(v, str)).lower()
+    
+    if not all_text.strip():
+        return {
+            'passed': False,
+            'score': 0,
+            'issues': ['No message content generated'],
+            'feedback_for_regen': 'No messages were generated. Please generate all required messages.'
+        }
+    
+    # Get email body specifically (most important message)
+    email_body = ''
+    for key in ['email_body', 'Email Body', 'email']:
+        if messages.get(key):
+            email_body = messages[key].lower()
+            break
+    
+    # === CHECK 1: Overused phrases ===
+    overused_found = []
+    for phrase in OVERUSED_PHRASES:
+        if phrase in all_text:
+            overused_found.append(phrase[:60])
+            score -= 10
+    if overused_found:
+        issues.append(f"RECYCLED PHRASES: Contains overused template language: {'; '.join(overused_found)}")
+    
+    # === CHECK 2: Persona mismatch ===
+    if persona in PERSONA_MISMATCH_RULES:
+        rules = PERSONA_MISMATCH_RULES[persona]
+        
+        # Check if email leads with wrong topic (first 200 chars of email body)
+        email_opening = email_body[:200] if email_body else all_text[:200]
+        bad_leads = [w for w in rules['should_not_lead_with'] if w in email_opening]
+        if bad_leads:
+            issues.append(f"PERSONA MISMATCH: Email opens with {'/'.join(bad_leads)} topics — wrong for {persona} persona")
+            score -= 15
+        
+        # Check if ANY relevant terms appear anywhere
+        has_relevant = any(term in all_text for term in rules['should_contain_any'])
+        if not has_relevant:
+            issues.append(f"PERSONA MISMATCH: No {persona}-relevant terms found in any message — messages aren't tailored to their role")
+            score -= 20
+    
+    # === CHECK 3: Length violations ===
+    if email_body:
+        word_count = len(email_body.split())
+        if word_count > 200:
+            issues.append(f"EMAIL TOO LONG: {word_count} words (target: 100-150)")
+            score -= 10
+        elif word_count < 40:
+            issues.append(f"EMAIL TOO SHORT: {word_count} words (target: 100-150)")
+            score -= 10
+    
+    # Check LinkedIn connection request length
+    for key in ['linkedin_connection', 'LinkedIn Connection Request']:
+        conn = messages.get(key, '')
+        if conn and len(conn) > 300:
+            issues.append(f"LINKEDIN CONNECTION TOO LONG: {len(conn)} chars (max: 200)")
+            score -= 5
+    
+    # === CHECK 4: Missing personalization ===
+    # Check if lead name or company name appears in email
+    if email_body:
+        has_name = lead_name.lower().split()[0] in email_body if lead_name and ' ' in lead_name else False
+        has_company = company_name.lower() in email_body if company_name else False
+        if not has_name and not has_company:
+            # Not necessarily an issue but worth flagging
+            pass  # Many good cold emails don't name-drop explicitly
+    
+    # Check for generic "[Company]" or "[Name]" placeholders left in
+    if '[company]' in all_text or '[name]' in all_text or '[your name]' in all_text.replace('your name', ''):
+        issues.append("UNFILLED PLACEHOLDERS: Contains [Company] or [Name] placeholder text")
+        score -= 15
+    
+    # === CHECK 5: Cross-message similarity ===
+    # Check if email and InMail are too similar (copy-paste)
+    inmail_body = ''
+    for key in ['linkedin_inmail_body', 'linkedin_inmail', 'LinkedIn InMail Body']:
+        if messages.get(key):
+            inmail_body = messages[key].lower()
+            break
+    
+    if email_body and inmail_body and len(email_body) > 50 and len(inmail_body) > 50:
+        # Simple similarity: shared word ratio
+        email_words = set(email_body.split())
+        inmail_words = set(inmail_body.split())
+        if email_words and inmail_words:
+            overlap = len(email_words & inmail_words) / min(len(email_words), len(inmail_words))
+            if overlap > 0.75:
+                issues.append(f"EMAIL/INMAIL TOO SIMILAR: {overlap:.0%} word overlap — these should be different messages with different angles")
+                score -= 15
+    
+    # === CHECK 6: Multiple proof points crammed in ===
+    proof_point_signals = ['sandoz', '95% batch', 'fda', 'ema', 'anvisa', 'lower half', 'cost benchmark']
+    if email_body:
+        proof_count = sum(1 for signal in proof_point_signals if signal in email_body)
+        if proof_count >= 4:
+            issues.append(f"TOO MANY PROOF POINTS: Email contains {proof_count} proof points — should be ONE per message")
+            score -= 15
+        elif proof_count == 3:
+            issues.append(f"PROOF POINT STUFFING: Email contains {proof_count} proof points — aim for ONE, maximum two")
+            score -= 8
+    
+    # Clamp score
+    score = max(0, min(100, score))
+    
+    # Build feedback for regeneration prompt
+    feedback = ''
+    if issues:
+        feedback = "QUALITY CHECK FAILED — FIX THESE ISSUES:\n"
+        for issue in issues:
+            feedback += f"- {issue}\n"
+        feedback += f"\nQuality score: {score}/100. Target: 85+.\n"
+        feedback += "Rewrite the messages addressing all issues above."
+    
+    return {
+        'passed': score >= 85,
+        'score': score,
+        'issues': issues,
+        'feedback_for_regen': feedback
+    }
+
+
+def validate_and_retry(messages: Dict[str, str], 
+                        regen_callback,
+                        persona: str = 'General',
+                        lead_name: str = '',
+                        company_name: str = '',
+                        max_retries: int = 1) -> tuple:
+    """Validate generated messages and retry if quality is too low.
+    
+    Call this after parsing the AI response and before writing to Airtable.
+    If the inline quality check fails, injects feedback and calls the 
+    regen_callback to get new messages.
+    
+    Args:
+        messages: Parsed message dict from AI (e.g. {'email_subject': ..., 'email_body': ...})
+        regen_callback: Function(feedback_str) -> Dict that regenerates messages.
+                        Receives the quality feedback string to inject into the prompt.
+                        Should return a new messages dict, or None on failure.
+        persona: Persona bucket for quality checking
+        lead_name: Lead name for personalization checks
+        company_name: Company name for personalization checks
+        max_retries: Max regeneration attempts (default 1)
+    
+    Returns:
+        (final_messages, quality_result) tuple
+        - final_messages: The best messages dict (original or regenerated)
+        - quality_result: Dict with 'passed', 'score', 'issues'
+    
+    Usage in a generator:
+        messages = json.loads(ai_response)
+        
+        def regen(feedback):
+            # Re-call the AI with feedback injected
+            new_prompt = original_prompt + "\\n\\n" + feedback
+            response = client.messages.create(...)
+            return json.loads(response)
+        
+        messages, quality = validate_and_retry(messages, regen, persona=persona)
+        # Then write messages to Airtable
+    """
+    if not messages:
+        return messages, {'passed': False, 'score': 0, 'issues': ['No messages to validate']}
+    
+    # First check
+    result = inline_quality_check(messages, persona, lead_name, company_name)
+    
+    if result['passed']:
+        logger.debug(f"  ✓ Quality check passed: {result['score']}/100")
+        return messages, result
+    
+    # Failed — try regeneration
+    logger.info(f"  ⚠ Quality check failed ({result['score']}/100): {'; '.join(result['issues'][:3])}")
+    
+    for attempt in range(max_retries):
+        logger.info(f"  → Regenerating (attempt {attempt + 1}/{max_retries})...")
+        
+        try:
+            new_messages = regen_callback(result['feedback_for_regen'])
+            
+            if not new_messages:
+                logger.warning(f"  → Regeneration returned empty result")
+                continue
+            
+            # Re-check
+            new_result = inline_quality_check(new_messages, persona, lead_name, company_name)
+            
+            if new_result['passed']:
+                logger.info(f"  ✓ Regenerated version passed: {new_result['score']}/100")
+                return new_messages, new_result
+            
+            if new_result['score'] > result['score']:
+                logger.info(f"  → Improved but still below threshold: {result['score']} → {new_result['score']}/100")
+                messages = new_messages
+                result = new_result
+            else:
+                logger.info(f"  → No improvement: {result['score']} → {new_result['score']}/100, keeping original")
+        
+        except Exception as e:
+            logger.warning(f"  → Regeneration error: {e}")
+    
+    # Return best version we have (may still be below threshold)
+    return messages, result
+
+
+def full_validate_outreach(anthropic_client, model: str, messages: Dict[str, str], 
+                            context: Dict, source_type: str = "general") -> Dict:
+    """Full AI-powered validation with web search fact-checking.
+    
+    Standalone function — no class needed. Any generator can call this
+    right after generating messages, before writing to Airtable.
+    
+    Args:
+        anthropic_client: Anthropic client instance
+        model: Model string (e.g. 'claude-sonnet-4-20250514')
+        messages: Dict of message field -> content (e.g. {'email_body': '...', 'linkedin_connection': '...'})
+        context: {
+            'lead_name': str,
+            'lead_title': str, 
+            'company_name': str,
+            'company_data': {  # optional
+                'location': str,
+                'funding': str,
+                'pipeline_stage': str,
+                'therapeutic_areas': str,
+                'manufacturing_status': str,
+            },
+            'trigger_type': str,  # optional
+            'trigger_description': str,  # optional
+            'campaign_type': str,  # optional
+            'campaign_name': str,  # optional
+        }
+        source_type: "general", "trigger", or "campaign"
+    
+    Returns:
+        {
+            'validity_score': 0-100,
+            'validity_rating': 'HIGH|MEDIUM|LOW|CRITICAL',
+            'issues_found': [...],
+            'suggested_edits': str or None,
+            'recommendation': str,
+            'validated_at': ISO timestamp,
+        }
+    """
+    from datetime import datetime
+    
+    # Combine all messages
+    all_messages = "\n\n---\n\n".join([
+        f"**{msg_type}:**\n{content}" 
+        for msg_type, content in messages.items() 
+        if content and isinstance(content, str) and content.strip()
+    ])
+    
+    if not all_messages.strip():
+        return {
+            'validity_score': 0, 'validity_rating': 'CRITICAL',
+            'issues_found': ['No outreach messages to validate'],
+            'recommendation': 'Generate messages first',
+            'validated_at': datetime.now().isoformat()
+        }
+    
+    # Build context
+    cd = context.get('company_data', {})
+    context_str = f"""
+LEAD INFORMATION (already verified - do NOT re-check):
+- Name: {context.get('lead_name', 'Unknown')}
+- Title: {context.get('lead_title', 'Unknown')}
+- Company: {context.get('company_name', 'Unknown')}
+
+COMPANY INFORMATION (from our database):
+- Location: {cd.get('location', cd.get('Location/HQ', 'Unknown'))}
+- Latest Funding: {cd.get('funding', cd.get('Funding Stage', 'Unknown'))}
+- Pipeline Stage: {cd.get('pipeline_stage', cd.get('Pipeline Stage', 'Unknown'))}
+- Therapeutic Areas: {cd.get('therapeutic_areas', cd.get('Therapeutic Areas', 'Unknown'))}
+- Manufacturing Status: {cd.get('manufacturing_status', cd.get('Manufacturing Status', 'Unknown'))}
+"""
+    
+    if context.get('trigger_type'):
+        context_str += f"""
+TRIGGER INFORMATION:
+- Type: {context.get('trigger_type', '')}
+- Description: {context.get('trigger_description', '')}
+"""
+    
+    if source_type == "campaign" or context.get('campaign_type'):
+        context_str += f"""
+CAMPAIGN INFORMATION:
+- Campaign Type: {context.get('campaign_type', 'Campaign Lead List')}
+- Campaign Name: {context.get('campaign_name', 'N/A')}
+"""
+    
+    # Do-not-flag rules
+    do_not_flag = """
+DO NOT flag as issues:
+- Lead name/title/company (already verified)
+- General statements that don't make specific claims
+- Standard CDMO value propositions"""
+    
+    if source_type == "campaign":
+        do_not_flag += """
+- Conference/event attendance (verified by campaign source data)
+- References to meeting at events (this is the outreach reason)"""
+    
+    do_not_flag += """
+
+ONLY flag as issues:
+- Specific factual claims in the message that are wrong or outdated
+- Recent developments that contradict the message
+- Inappropriate tone or content"""
+    
+    campaign_note = ""
+    if source_type == "campaign":
+        campaign_note = "IMPORTANT: This lead comes from a campaign list. Event attendance references are VERIFIED FACTS."
+    
+    validation_prompt = f"""You are a quality assurance specialist reviewing B2B outreach messages for a biologics CDMO.
+
+CONTEXT (from our database - already verified):
+{context_str}
+
+{campaign_note}
+
+OUTREACH MESSAGES TO VALIDATE:
+{all_messages}
+
+IMPORTANT: Lead's name, title, and company are ALREADY VERIFIED. Do NOT mark these as issues.
+
+VALIDATION TASKS:
+1. Check specific claims (funding amounts, pipeline stages, partnerships, recent news) — are they accurate?
+2. Detect outdated information — has anything changed recently?
+3. Check for hallucinations — fabricated or unverifiable statements?
+4. Tone & appropriateness for recipient's seniority and industry
+5. Factual accuracy of any specific facts mentioned
+
+{do_not_flag}
+
+RATING SCALE:
+- HIGH (90-100): Accurate, safe to send
+- MEDIUM (70-89): Minor uncertainties, quick review recommended
+- LOW (50-69): Claims appear incorrect or outdated, manual review required
+- CRITICAL (0-49): Major factual errors, do not send
+
+Return ONLY valid JSON:
+{{
+    "validity_score": 85,
+    "validity_rating": "HIGH|MEDIUM|LOW|CRITICAL",
+    "issues_found": ["Specific issue with message content"],
+    "suggested_edits": "Specific edits needed or null",
+    "recommendation": "Action for the sales team"
+}}
+
+Return ONLY JSON."""
+
+    try:
+        response = anthropic_client.messages.create(
+            model=model,
+            max_tokens=2000,
+            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            messages=[{"role": "user", "content": validation_prompt}]
+        )
+        
+        response_text = ""
+        for block in response.content:
+            if hasattr(block, 'text'):
+                response_text += block.text
+        
+        if "```json" in response_text:
+            json_str = response_text.split("```json")[1].split("```")[0]
+        elif "{" in response_text:
+            start = response_text.find("{")
+            end = response_text.rfind("}") + 1
+            json_str = response_text[start:end]
+        else:
+            raise ValueError("No JSON in validation response")
+        
+        result = json.loads(json_str.strip())
+        result['validated_at'] = datetime.now().isoformat()
+        return result
+        
+    except Exception as e:
+        logger.error(f"Validation error: {e}")
+        return {
+            'validity_score': 50, 'validity_rating': 'LOW',
+            'issues_found': [f'Validation error: {str(e)}'],
+            'recommendation': 'Manual review required',
+            'validated_at': datetime.now().isoformat()
+        }
+
+
+def generate_validate_loop(anthropic_client, model: str,
+                            generate_fn,
+                            context: Dict,
+                            persona: str = 'General',
+                            source_type: str = 'general',
+                            max_attempts: int = 2,
+                            structural_threshold: int = 85,
+                            validation_threshold: int = 70,
+                            pre_generated: Dict = None) -> tuple:
+    """Complete generate → structural check → validate → regen loop.
+    
+    This is the master function that every outreach generator should call.
+    
+    Flow:
+    1. Use pre_generated messages OR call generate_fn() to get messages
+    2. Run inline_quality_check (structural, instant)
+    3. If structural fails → regenerate with feedback
+    4. Run full_validate_outreach (web search fact-check)
+    5. If validation fails → regenerate with validation feedback
+    6. Return best messages + combined quality result
+    
+    Args:
+        anthropic_client: Anthropic client
+        model: Model string
+        generate_fn: Function(feedback=None) -> Dict that generates messages.
+                     When feedback is provided, it should inject the feedback 
+                     into the prompt and regenerate.
+        context: Dict with lead_name, lead_title, company_name, company_data, etc.
+        persona: Persona bucket for structural checks
+        source_type: "general", "trigger", or "campaign"
+        max_attempts: Max total generation attempts (default 2: original + 1 retry)
+        structural_threshold: Score below which structural check triggers regen
+        validation_threshold: Score below which validation triggers regen
+        pre_generated: Optional already-generated messages to validate first 
+                       (avoids double-generating on first pass)
+    
+    Returns:
+        (messages, result) tuple where:
+        - messages: Best messages dict
+        - result: {
+            'structural_score': int,
+            'validation_score': int,
+            'validation_rating': str,
+            'issues': list,
+            'passed': bool,
+            'validated_at': str
+          }
+    """
+    lead_name = context.get('lead_name', '')
+    company_name = context.get('company_name', '')
+    
+    best_messages = None
+    best_combined_score = 0
+    prev_feedback = None
+    structural = {'score': 0, 'issues': []}
+    validation = {}
+    val_score = 0
+    
+    for attempt in range(max_attempts):
+        # Step 1: Generate (or use pre-generated on first pass)
+        if attempt == 0 and pre_generated:
+            messages = pre_generated
+        else:
+            try:
+                messages = generate_fn(prev_feedback)
+            except Exception as e:
+                logger.warning(f"  Generation attempt {attempt+1} failed: {e}")
+                continue
+        
+        if not messages:
+            logger.warning(f"  Generation attempt {attempt+1} returned empty")
+            continue
+        
+        # Step 2: Structural quality check (instant, no API call)
+        structural = inline_quality_check(messages, persona, lead_name, company_name)
+        
+        if not structural['passed'] and attempt < max_attempts - 1:
+            logger.info(f"  ⚠ Structural check failed ({structural['score']}/100): {'; '.join(structural['issues'][:2])}")
+            prev_feedback = structural['feedback_for_regen']
+            if structural['score'] > best_combined_score:
+                best_messages = messages
+                best_combined_score = structural['score']
+            continue
+        
+        # Step 3: Full validation with web search
+        validation = full_validate_outreach(
+            anthropic_client, model, messages, context, source_type
+        )
+        
+        val_score = validation.get('validity_score', 50)
+        combined_score = min(structural['score'], val_score)
+        
+        logger.info(f"  Structural: {structural['score']}/100 | Validation: {val_score}/100 ({validation.get('validity_rating', '?')})")
+        
+        if val_score >= validation_threshold:
+            # Good enough — return
+            return messages, {
+                'structural_score': structural['score'],
+                'validation_score': val_score,
+                'validation_rating': validation.get('validity_rating', 'MEDIUM'),
+                'issues': structural.get('issues', []) + validation.get('issues_found', []),
+                'suggested_edits': validation.get('suggested_edits'),
+                'passed': True,
+                'validated_at': validation.get('validated_at')
+            }
+        
+        # Validation failed — build feedback for next attempt
+        issues = validation.get('issues_found', [])
+        suggested = validation.get('suggested_edits', '')
+        recommendation = validation.get('recommendation', '')
+        
+        parts = []
+        if issues:
+            parts.append("VALIDATION ISSUES TO FIX:\n" + "\n".join(f"- {i}" for i in issues))
+        if suggested:
+            parts.append(f"SUGGESTED EDITS: {suggested}")
+        if recommendation:
+            parts.append(f"RECOMMENDATION: {recommendation}")
+        if structural.get('issues'):
+            parts.append("STRUCTURAL ISSUES:\n" + "\n".join(f"- {i}" for i in structural['issues']))
+        
+        prev_feedback = (
+            f"═══ PREVIOUS VERSION FAILED (validation: {val_score}/100, structural: {structural['score']}/100) ═══\n"
+            + "\n".join(parts) +
+            "\n═══ FIX ALL ISSUES ABOVE ═══"
+        )
+        
+        if combined_score > best_combined_score:
+            best_messages = messages
+            best_combined_score = combined_score
+    
+    # Return best attempt
+    if best_messages is None:
+        best_messages = messages if 'messages' in locals() and messages else {}
+    
+    return best_messages, {
+        'structural_score': structural.get('score', 0),
+        'validation_score': val_score,
+        'validation_rating': validation.get('validity_rating', 'LOW'),
+        'issues': structural.get('issues', []) + validation.get('issues_found', []),
+        'suggested_edits': validation.get('suggested_edits'),
+        'passed': False,
+        'validated_at': validation.get('validated_at', datetime.now().isoformat())
+    }
