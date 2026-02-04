@@ -19,7 +19,8 @@ from company_profile_utils import (load_company_profile, load_persona_messaging,
                                    build_outreach_philosophy, filter_by_confidence,
                                    suppressed_to_do_not_mention, classify_persona,
                                    inline_quality_check, validate_and_retry,
-                                   full_validate_outreach, generate_validate_loop)
+                                   full_validate_outreach, generate_validate_loop,
+                                   validation_fields_for_airtable)
 
 # Configure logging FIRST (before using logger)
 logging.basicConfig(
@@ -476,7 +477,7 @@ SCORING CRITERIA (0-100):
 
 EXAMPLES:
 - BioMarin (large pharma with biologics) = 85-90 (biologics focus, commercial, big pharma)
-- Sandoz (biosimilars) = 90-95 (biosimilar expertise match!)
+- Biosimilar developer (e.g. mid-size, EU-based, mammalian pipeline) = 90-95 (biosimilar expertise match!)
 - Sanofi (large pharma with biologics) = 80-85 (size, biologics programs)
 - MSD/Merck (large pharma with biologics) = 80-85 (if biologics division)
 - Small biotech (30 employees, Phase 1 biologics) = 65-70 (small but biologics)
@@ -1401,6 +1402,9 @@ Return ONLY JSON."""
             if data.get('linkedin_inmail'):
                 outreach_update['LinkedIn InMail Body'] = data['linkedin_inmail']
             
+            # Add validation fields
+            outreach_update.update(validation_fields_for_airtable(quality))
+            
             self.leads_table.update(lead_id, outreach_update)
             logger.info(f"    ✓ Generic outreach messages generated")
             return True
@@ -1483,6 +1487,10 @@ Return ONLY JSON."""
                 if outreach.get('linkedin_short'):
                     trigger_data['LinkedIn Short Message'] = outreach['linkedin_short']
                 trigger_data['Outreach Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                # Add validation fields
+                quality = outreach.get('_validation')
+                if quality:
+                    trigger_data.update(validation_fields_for_airtable(quality))
                 logger.info(f"    ✓ Outreach messages generated")
             else:
                 logger.warning(f"    ⚠ Could not generate outreach messages")
@@ -1619,6 +1627,8 @@ Return ONLY JSON."""
             )
             logger.debug(f"    Conference outreach validation: {quality.get('validation_score', 0)}/100")
             
+            if data:
+                data['_validation'] = quality
             return data
             
         except Exception as e:
