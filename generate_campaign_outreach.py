@@ -29,7 +29,7 @@ from company_profile_utils import (load_company_profile, load_persona_messaging,
                                    build_outreach_philosophy, filter_by_confidence,
                                    suppressed_to_do_not_mention, classify_persona,
                                    inline_quality_check, validate_and_retry,
-                                   generate_validate_loop)
+                                   generate_validate_loop, validation_fields_for_airtable)
 
 # Configure logging FIRST
 logging.basicConfig(
@@ -1005,7 +1005,7 @@ Body: Start with their world, connect ONE Rezon strength to their situation, sof
 Sign: "Best regards, [Your Name]"
 
 2. LINKEDIN CONNECTION (under 200 chars):
-Why you'd like to connect — reference their role or work
+Why you'd like to connect. Reference their role or work
 
 3. LINKEDIN SHORT MESSAGE (under 300 chars):
 After connection. Relevant to their role, brief value mention
@@ -1096,6 +1096,9 @@ Return ONLY JSON."""
                 outreach_update['LinkedIn InMail Subject'] = data['linkedin_inmail_subject']
             if data.get('linkedin_inmail'):
                 outreach_update['LinkedIn InMail Body'] = data['linkedin_inmail']
+            
+            # Add validation fields
+            outreach_update.update(validation_fields_for_airtable(quality))
             
             self.leads_table.update(lead_id, outreach_update)
             logger.info(f"    ✓ Generic outreach messages generated for lead")
@@ -1313,25 +1316,55 @@ Return ONLY JSON."""
         
         # === CAMPAIGN-SPECIFIC SECTION ===
         campaign_section = ""
+        
+        # Compute relative timing for campaign date
+        timing_note = ""
+        if campaign_date:
+            try:
+                from dateutil import parser as date_parser
+                event_dt = date_parser.parse(campaign_date)
+                today = datetime.now()
+                days_until = (event_dt - today).days
+                if days_until < 0:
+                    timing_note = f"The event was {abs(days_until)} days ago. Do NOT say 'next week' or 'next month'. Reference it in past tense."
+                elif days_until <= 7:
+                    timing_note = f"The event is THIS WEEK (in {days_until} days). Say 'this week' or 'in a few days'."
+                elif days_until <= 14:
+                    timing_note = f"The event is NEXT WEEK. Say 'next week'."
+                elif days_until <= 45:
+                    timing_note = f"The event is NEXT MONTH (in about {days_until // 7} weeks). Say 'next month' or 'in a few weeks'."
+                elif days_until <= 90:
+                    timing_note = f"The event is in about {days_until // 30} months. Say 'in {event_dt.strftime('%B')}' or 'in a couple of months'."
+                else:
+                    timing_note = f"The event is in {event_dt.strftime('%B %Y')}. Reference the month by name."
+            except Exception:
+                timing_note = f"Event date: {campaign_date}. Use the correct relative timing (next week, next month, etc.)."
+        
         if campaign_type == 'Conference' and conference_name:
             campaign_section = f"""
 CAMPAIGN: Conference outreach for {conference_name}
-Date: {campaign_date}
+Event date: {campaign_date}
+Today's date: {datetime.now().strftime('%Y-%m-%d')}
+TIMING: {timing_note}
 Background: {campaign_background}
 
-This is conference outreach — the conference is the REASON for reaching out.
+This is conference outreach. The conference is the REASON for reaching out.
 - Mention you'll be at {conference_name}
+- Use the CORRECT relative timing based on the dates above. NEVER guess "next week" if the event is a month away.
 - Suggest meeting at the event
-- Keep it natural — like reaching out to someone you'd like to meet
+- Keep it natural, like reaching out to someone you'd like to meet
 """
         elif campaign_type == 'Roadshow':
             campaign_section = f"""
 CAMPAIGN: Roadshow outreach
-Date: {campaign_date}
+Event date: {campaign_date}
+Today's date: {datetime.now().strftime('%Y-%m-%d')}
+TIMING: {timing_note}
 Background: {campaign_background}
 
-This is roadshow outreach — you're visiting their region/city.
+This is roadshow outreach. You're visiting their region/city.
 - Mention you'll be in their area for meetings
+- Use the CORRECT relative timing based on the dates above
 - Suggest meeting while you're there
 - Frame it as convenient timing
 - Keep it natural and low-pressure
@@ -1358,7 +1391,7 @@ COMPANY BACKGROUND (verified):
 GENERATE FOUR MESSAGES:
 ═══════════════════════════════════════════════════════════
 
-MESSAGE 1: EMAIL (100-120 words — HARD LIMIT)
+MESSAGE 1: EMAIL (100-120 words, HARD LIMIT)
 Subject: [Natural, short, references context or conference]
 Body: Start with THEIR world (their work, stage, or challenge), connect ONE Rezon strength to their situation, soft CTA
 Sign: "Best regards, [Your Name]"
@@ -1437,7 +1470,7 @@ Return ONLY valid JSON:
             logger.error(f"Error generating outreach: {e}")
             return {}
     
-    def update_campaign_lead_outreach(self, record_id: str, messages: Dict) -> bool:
+    def update_campaign_lead_outreach(self, record_id: str, messages: Dict, quality: Dict = None) -> bool:
         """Update campaign lead with generated outreach messages"""
         try:
             update = {}
@@ -1456,6 +1489,10 @@ Return ONLY valid JSON:
                 update['LinkedIn Short Message'] = messages['linkedin_short']
             
             update['Message Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+            
+            # Add validation fields if available
+            if quality:
+                update.update(validation_fields_for_airtable(quality))
             
             if update:
                 self.campaign_leads_table.update(record_id, update)
@@ -1731,6 +1768,7 @@ Return ONLY valid JSON:
                     'company_data': company_data,
                     'campaign_type': campaign_context.get('Campaign Type', ''),
                     'campaign_name': campaign_context.get('Conference Name', ''),
+                    'campaign_date': campaign_context.get('Campaign Date', ''),
                 }
                 
                 messages, quality = generate_validate_loop(
@@ -1739,7 +1777,7 @@ Return ONLY valid JSON:
                 )
                 
                 if messages:
-                    if self.update_campaign_lead_outreach(record_id, messages):
+                    if self.update_campaign_lead_outreach(record_id, messages, quality=quality):
                         vr = quality.get('validation_rating', '?')
                         vs = quality.get('validation_score', 0)
                         logger.info(f"  ✓ Outreach generated (validation: {vs}/100 {vr})")
@@ -1913,6 +1951,7 @@ Return ONLY valid JSON:
                     'company_data': company_data,
                     'campaign_type': campaign_context.get('Campaign Type', ''),
                     'campaign_name': campaign_context.get('Conference Name', ''),
+                    'campaign_date': campaign_context.get('Campaign Date', ''),
                 }
                 
                 messages, quality = generate_validate_loop(
@@ -1921,7 +1960,7 @@ Return ONLY valid JSON:
                 )
                 
                 if messages:
-                    if self.update_campaign_lead_outreach(record_id, messages):
+                    if self.update_campaign_lead_outreach(record_id, messages, quality=quality):
                         vs = quality.get('validation_score', 0)
                         logger.info(f"  ✓ Outreach refreshed (validation: {vs}/100)")
                         success += 1
