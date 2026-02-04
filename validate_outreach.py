@@ -85,6 +85,7 @@ class OutreachValidator:
     
     def __init__(self, config_path: str = "config.yaml"):
         """Initialize with configuration"""
+        self.config_path = config_path
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
@@ -588,6 +589,304 @@ Return ONLY JSON, no other text."""
         except Exception as e:
             logger.error(f"Error updating campaign lead validation: {e}")
     
+    # =========================================================================
+    # VALIDATION → REGENERATION LOOP
+    # =========================================================================
+    
+    def _get_campaign_processor(self):
+        """Lazy-load the CampaignLeadProcessor for regeneration."""
+        if not hasattr(self, '_campaign_processor'):
+            try:
+                from process_campaign_leads import CampaignLeadProcessor
+                self._campaign_processor = CampaignLeadProcessor(config_path=self.config_path)
+                logger.info("✓ CampaignLeadProcessor loaded for regeneration")
+            except Exception as e:
+                logger.error(f"Could not load CampaignLeadProcessor: {e}")
+                self._campaign_processor = None
+        return self._campaign_processor
+    
+    def _get_outreach_generator(self):
+        """Lazy-load the OutreachGenerator for lead regeneration."""
+        if not hasattr(self, '_outreach_generator'):
+            try:
+                from generate_outreach import OutreachGenerator
+                self._outreach_generator = OutreachGenerator(config_path=self.config_path)
+                logger.info("✓ OutreachGenerator loaded for regeneration")
+            except Exception as e:
+                logger.error(f"Could not load OutreachGenerator: {e}")
+                self._outreach_generator = None
+        return self._outreach_generator
+    
+    def _get_trigger_outreach_generator(self):
+        """Lazy-load the TriggerOutreachGenerator for trigger regeneration."""
+        if not hasattr(self, '_trigger_generator'):
+            try:
+                from generate_trigger_outreach import TriggerOutreachGenerator
+                self._trigger_generator = TriggerOutreachGenerator(config_path=self.config_path)
+                logger.info("✓ TriggerOutreachGenerator loaded for regeneration")
+            except Exception as e:
+                logger.error(f"Could not load TriggerOutreachGenerator: {e}")
+                self._trigger_generator = None
+        return self._trigger_generator
+    
+    def regenerate_campaign_lead(self, record: Dict, validation: Dict) -> bool:
+        """Regenerate a campaign lead's outreach using validation feedback.
+        
+        Calls the same outreach generator but injects the validation issues
+        as additional guidance so the AI avoids the same mistakes.
+        
+        Args:
+            record: Full Airtable record 
+            validation: Validation results with issues_found, suggested_edits, etc.
+            
+        Returns:
+            True if regeneration succeeded and new messages were saved
+        """
+        processor = self._get_campaign_processor()
+        if not processor:
+            logger.error("Cannot regenerate — CampaignLeadProcessor not available")
+            return False
+        
+        fields = record['fields']
+        record_id = record['id']
+        name = fields.get('Lead Name', fields.get('Name', 'Unknown'))
+        
+        try:
+            # Get linked data
+            lead_record_ids = fields.get('Linked Lead', [])
+            company_record_ids = fields.get('Linked Company', [])
+            
+            lead_data = {}
+            company_data = {}
+            
+            if lead_record_ids:
+                lead_data = self.leads_table.get(lead_record_ids[0])['fields']
+            if company_record_ids:
+                company_data = self.companies_table.get(company_record_ids[0])['fields']
+            
+            campaign_context = {
+                'Campaign Type': fields.get('Campaign Type', 'general'),
+                'Conference Name': fields.get('Conference Name', ''),
+                'Campaign Background': fields.get('Campaign Background', ''),
+                'Campaign Date': fields.get('Campaign Date', ''),
+            }
+            
+            # === INJECT VALIDATION FEEDBACK ===
+            # Build a feedback block from the validation results
+            issues = validation.get('issues_found', [])
+            suggested_edits = validation.get('suggested_edits', '')
+            recommendation = validation.get('recommendation', '')
+            
+            feedback_parts = []
+            if issues:
+                feedback_parts.append("ISSUES TO FIX:\n" + "\n".join(f"- {i}" for i in issues))
+            if suggested_edits:
+                feedback_parts.append(f"SUGGESTED EDITS: {suggested_edits}")
+            if recommendation:
+                feedback_parts.append(f"RECOMMENDATION: {recommendation}")
+            
+            validation_feedback = "\n".join(feedback_parts)
+            
+            # Temporarily patch the campaign background to include feedback
+            original_background = campaign_context.get('Campaign Background', '')
+            campaign_context['Campaign Background'] = (
+                f"{original_background}\n\n"
+                f"═══ IMPORTANT — PREVIOUS VERSION FAILED VALIDATION (score: {validation.get('validity_score', 0)}/100) ═══\n"
+                f"{validation_feedback}\n"
+                f"═══ FIX THESE ISSUES IN THE NEW VERSION ═══"
+            )
+            
+            # Generate new messages
+            messages = processor.generate_outreach_messages(lead_data, company_data, campaign_context)
+            
+            if messages:
+                # Save new messages
+                processor.update_campaign_lead_outreach(record_id, messages)
+                
+                # Clear the old validation so the new messages get re-validated
+                try:
+                    self.campaign_leads_table.update(record_id, {
+                        'Outreach Validity Rating': '',
+                        'Outreach Validity Score': None,
+                        'Outreach Validation Notes': f"⟳ Regenerated after score {validation.get('validity_score', 0)}/100. Previous issues: {'; '.join(issues[:3])}",
+                        'Outreach Validated At': None,
+                    })
+                except Exception:
+                    # Some fields may not exist or be clearable
+                    try:
+                        self.campaign_leads_table.update(record_id, {
+                            'Outreach Validation Notes': f"⟳ Regenerated after score {validation.get('validity_score', 0)}/100"
+                        })
+                    except:
+                        pass
+                
+                logger.info(f"  ⟳ Regenerated outreach for {name}")
+                return True
+            else:
+                logger.warning(f"  ⚠ Regeneration produced no messages for {name}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"  ✗ Regeneration error for {name}: {e}")
+            return False
+    
+    def validate_and_regenerate_campaign(self, limit: int = None, 
+                                          regen_threshold: int = 85,
+                                          max_regen_attempts: int = 1):
+        """Validate campaign leads and auto-regenerate those below threshold.
+        
+        Flow:
+        1. Validate all unvalidated campaign leads
+        2. For any with score < regen_threshold, regenerate using validation feedback
+        3. Re-validate the regenerated messages (one pass only to avoid loops)
+        
+        Args:
+            limit: Max campaign leads to process
+            regen_threshold: Score below which to auto-regenerate (default 85)
+            max_regen_attempts: Max regeneration attempts per lead (default 1)
+        """
+        if not self.campaign_leads_table:
+            logger.error("Campaign Leads table not available")
+            return
+        
+        logger.info("="*70)
+        logger.info("CAMPAIGN OUTREACH: VALIDATE → REGENERATE LOOP")
+        logger.info(f"Regen threshold: <{regen_threshold}/100")
+        logger.info(f"Max regen attempts: {max_regen_attempts}")
+        logger.info("="*70)
+        
+        stats = {
+            'validated': 0, 'high': 0, 'medium': 0, 'low': 0, 'critical': 0,
+            'regenerated': 0, 'regen_success': 0, 'regen_improved': 0,
+            'errors': 0
+        }
+        
+        # === PHASE 1: VALIDATE ===
+        logger.info("\n--- PHASE 1: VALIDATION ---")
+        campaign_leads = self.get_campaign_leads_needing_validation(limit=limit)
+        total = len(campaign_leads)
+        logger.info(f"Found {total} campaign leads needing validation")
+        
+        needs_regen = []  # (record, validation) pairs
+        
+        for idx, campaign in enumerate(campaign_leads, 1):
+            lead_name = campaign['fields'].get('Lead Name', campaign['fields'].get('Name', 'Unknown'))
+            company_name = campaign['fields'].get('Company', 'Unknown')
+            logger.info(f"\n[{idx}/{total}] {lead_name} @ {company_name}")
+            
+            try:
+                messages = {
+                    field: campaign['fields'].get(field, '') 
+                    for field in self.CAMPAIGN_OUTREACH_FIELDS
+                }
+                
+                context = {
+                    'lead_name': lead_name,
+                    'lead_title': campaign['fields'].get('Title', ''),
+                    'lead_email': campaign['fields'].get('Email', ''),
+                    'lead_linkedin': campaign['fields'].get('LinkedIn URL', ''),
+                    'company_name': company_name,
+                    'company_data': {
+                        'location': campaign['fields'].get('Location', ''),
+                        'funding': campaign['fields'].get('Funding', ''),
+                        'pipeline_stage': campaign['fields'].get('Pipeline Stage', ''),
+                        'therapeutic_areas': campaign['fields'].get('Therapeutic Areas', ''),
+                        'intelligence_notes': campaign['fields'].get('Notes', campaign['fields'].get('Processing Notes', ''))
+                    },
+                    'campaign_context': {
+                        'campaign_type': campaign['fields'].get('Campaign Type', ''),
+                        'campaign_name': campaign['fields'].get('Campaign Name', campaign['fields'].get('Conference', ''))
+                    }
+                }
+                
+                validation = self.validate_outreach_messages(messages, context, source_type="campaign")
+                self.update_campaign_lead_validation(campaign['id'], validation)
+                
+                score = validation.get('validity_score', 0)
+                rating = validation.get('validity_rating', 'LOW')
+                stats['validated'] += 1
+                stats[rating.lower()] = stats.get(rating.lower(), 0) + 1
+                
+                logger.info(f"  ✓ Score: {score}/100 ({rating})")
+                
+                if score < regen_threshold:
+                    needs_regen.append((campaign, validation))
+                    logger.info(f"  → Flagged for regeneration (below {regen_threshold})")
+                
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"  ✗ Error: {e}")
+                stats['errors'] += 1
+        
+        # === PHASE 2: REGENERATE ===
+        if needs_regen:
+            logger.info(f"\n--- PHASE 2: REGENERATION ({len(needs_regen)} leads) ---")
+            
+            for idx, (campaign, validation) in enumerate(needs_regen, 1):
+                lead_name = campaign['fields'].get('Lead Name', campaign['fields'].get('Name', 'Unknown'))
+                old_score = validation.get('validity_score', 0)
+                logger.info(f"\n[{idx}/{len(needs_regen)}] Regenerating: {lead_name} (was {old_score}/100)")
+                
+                stats['regenerated'] += 1
+                
+                if self.regenerate_campaign_lead(campaign, validation):
+                    stats['regen_success'] += 1
+                    
+                    # === PHASE 3: RE-VALIDATE regenerated message ===
+                    time.sleep(2)  # Let Airtable settle
+                    try:
+                        # Fetch fresh record
+                        fresh_record = self.campaign_leads_table.get(campaign['id'])
+                        fresh_messages = {
+                            field: fresh_record['fields'].get(field, '')
+                            for field in self.CAMPAIGN_OUTREACH_FIELDS
+                        }
+                        
+                        # Re-validate with same context
+                        re_validation = self.validate_outreach_messages(
+                            fresh_messages, 
+                            {
+                                'lead_name': lead_name,
+                                'lead_title': campaign['fields'].get('Title', ''),
+                                'company_name': campaign['fields'].get('Company', ''),
+                                'company_data': {},
+                                'campaign_context': {
+                                    'campaign_type': campaign['fields'].get('Campaign Type', ''),
+                                    'campaign_name': campaign['fields'].get('Campaign Name', campaign['fields'].get('Conference', ''))
+                                }
+                            },
+                            source_type="campaign"
+                        )
+                        
+                        new_score = re_validation.get('validity_score', 0)
+                        self.update_campaign_lead_validation(campaign['id'], re_validation)
+                        
+                        if new_score > old_score:
+                            stats['regen_improved'] += 1
+                            logger.info(f"  ✓ Improved: {old_score} → {new_score}/100")
+                        else:
+                            logger.info(f"  → Score: {old_score} → {new_score}/100 (no improvement)")
+                        
+                    except Exception as e:
+                        logger.error(f"  Re-validation error: {e}")
+                
+                time.sleep(1)
+        else:
+            logger.info("\n--- No leads need regeneration ---")
+        
+        # === SUMMARY ===
+        logger.info("\n" + "="*70)
+        logger.info("VALIDATE → REGENERATE COMPLETE")
+        logger.info("="*70)
+        logger.info(f"Validated: {stats['validated']}")
+        logger.info(f"  HIGH: {stats['high']} | MEDIUM: {stats['medium']} | LOW: {stats['low']} | CRITICAL: {stats['critical']}")
+        logger.info(f"Regenerated: {stats['regenerated']} (success: {stats['regen_success']}, improved: {stats['regen_improved']})")
+        logger.info(f"Errors: {stats['errors']}")
+        logger.info("="*70)
+        
+        return stats
+    
     def _format_validation_notes(self, validation: Dict) -> str:
         """Format validation results into readable notes"""
         notes = []
@@ -938,6 +1237,10 @@ def main():
     parser.add_argument('--leads-only', action='store_true', help='Only validate leads')
     parser.add_argument('--triggers-only', action='store_true', help='Only validate triggers')
     parser.add_argument('--campaign-only', action='store_true', help='Only validate campaign leads')
+    parser.add_argument('--campaign-regen', action='store_true', 
+                        help='Validate campaign leads and auto-regenerate those below threshold')
+    parser.add_argument('--regen-threshold', type=int, default=85,
+                        help='Score below which to auto-regenerate (default: 85)')
     parser.add_argument('--lead-id', type=str, help='Validate specific lead by ID')
     parser.add_argument('--trigger-id', type=str, help='Validate specific trigger by ID')
     parser.add_argument('--limit', type=int, default=None, help='Max records per table (default: no limit)')
@@ -959,8 +1262,15 @@ def main():
             print(f"\nRating: {result['validity_rating']} ({result['validity_score']}/100)")
             print(f"Recommendation: {result.get('recommendation', 'N/A')}")
     
+    elif args.campaign_regen:
+        # NEW: Validate + auto-regenerate below threshold
+        validator.validate_and_regenerate_campaign(
+            limit=args.limit,
+            regen_threshold=args.regen_threshold
+        )
+    
     elif args.campaign_only:
-        # Only validate campaign leads
+        # Only validate campaign leads (no regeneration)
         validator.validate_campaign_leads_only(limit=args.limit)
     
     else:
