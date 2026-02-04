@@ -15,7 +15,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import anthropic
 from pyairtable import Api
-from company_profile_utils import build_outreach_philosophy
+from company_profile_utils import (build_outreach_philosophy, build_value_proposition,
+                                   load_company_profile, load_persona_messaging)
 
 # Configure logging
 logging.basicConfig(
@@ -53,6 +54,9 @@ class TriggerOutreachGenerator:
             self.company_profile_table = None
             self.company_profile = None
             logger.info("Note: Company Profile table not found - using generic messaging")
+        
+        # Load persona messaging for persona-driven proof point selection
+        self.persona_messaging = load_persona_messaging(self.base)
         
         self.anthropic_client = anthropic.Anthropic(
             api_key=self.config['anthropic']['api_key']
@@ -203,24 +207,16 @@ RECENT ACTIVITY:
 {activity_parts[-1][:1000]}
 """
         
-        # Add OUR company profile
-        our_profile_section = ""
-        if self.company_profile:
-            our_profile_section = f"""
-YOUR COMPANY (Rezon Bio):
-Positioning: {self.company_profile.get('Positioning Statement', self.company_profile.get('Value Proposition', ''))[:400]}
-
-Key Strengths:
-{self.company_profile.get('Key Strengths', self.company_profile.get('Competitive Advantages', ''))[:600]}
-
-Differentiation:
-{self.company_profile.get('Differentiation vs Competitors', self.company_profile.get('Competitive Positioning', ''))[:500]}
-
-IMPORTANT - Honest Limitations:
-{self.company_profile.get('Key Weaknesses', self.company_profile.get('Honest Limitations', ''))[:400]}
-
-DO NOT overpromise. Be authentic and conversational.
-"""
+        # Add OUR company profile — uses shared value proposition builder
+        # that pulls from Company Profile table and matches to persona
+        lead_title = lead_context.get('title', '')
+        company_data = lead_context.get('company_context', {})
+        our_profile_section = build_value_proposition(
+            self.company_profile or {},
+            company_data,
+            lead_title,
+            persona_messaging=self.persona_messaging
+        )
         
         # Build the main prompt
         prompt = f"""You are an expert business development writer creating personalized outreach for a SPECIFIC TRIGGER EVENT.
