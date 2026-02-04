@@ -91,8 +91,8 @@ COMPANY_ALIASES = {
     'pfe': ['pfizer'],
     'pfizer': ['pfe'],
     'nvs': ['novartis'],
-    'novartis': ['nvs', 'sandoz'],  # Sandoz is a Novartis division
-    'sandoz': ['novartis', 'sandoz group', 'sandoz ag'],
+    'novartis': ['nvs'],  # Sandoz spun off as independent company in 2023
+    'sandoz': ['sandoz group', 'sandoz ag'],
     'sandoz group': ['sandoz', 'sandoz ag'],
     'roche': ['rhhby', 'hoffmann la roche', 'f hoffmann la roche', 'genentech'],
     'genentech': ['roche'],
