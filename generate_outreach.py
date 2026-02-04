@@ -17,7 +17,8 @@ from pyairtable import Api
 from company_profile_utils import (build_outreach_philosophy, build_value_proposition, 
                                    load_company_profile, load_persona_messaging,
                                    inline_quality_check, validate_and_retry,
-                                   full_validate_outreach, generate_validate_loop)
+                                   full_validate_outreach, generate_validate_loop,
+                                   validation_fields_for_airtable, classify_persona)
 
 # Configure logging
 logging.basicConfig(
@@ -176,7 +177,7 @@ YOUR MISSION: Create THREE outreach messages that answer "Why should I take this
 CRITICAL RULES FOR AUTHENTIC OUTREACH:
 1. Lead with THEIR world — start with an observation about their work, stage, or challenge
 2. Connect ONE Rezon strength to THEIR specific situation — don't list capabilities
-3. Include ONE proof point woven naturally (Sandoz qualification, biosimilar track record, regulatory credentials)
+3. Include ONE proof point woven naturally (multinational pharma track record, regulatory credentials, technical capability)
 4. Be human, not AI-polished — natural language, occasional imperfection is fine
 5. Keep it about THEM, not about us — never say "you're our primary focus"
 6. Avoid bullet point lists — weave key points into natural sentences
@@ -269,7 +270,7 @@ BAD - Generic CDMO pitch:
 "We are a leading European CDMO offering state-of-the-art mammalian cell culture manufacturing. We'd love to discuss our capabilities."
 
 GOOD - Connects Rezon strength to their situation:
-"Scaling a bispecific from Phase 2 into commercial manufacturing is where timelines get tight. Our Sandoz-qualified facilities were built for exactly this transition — happy to share how we've handled similar programs."
+"Scaling a bispecific from Phase 2 into commercial manufacturing is where timelines get tight. Our pharma-validated facilities were built for exactly this transition — happy to share how we've handled similar programs."
 
 BAD - Lists features:
 "As Head of CMC at a mid-size biotech, you're likely facing several challenges:
@@ -385,6 +386,7 @@ Only return valid JSON, no other text."""
                 vs = quality.get('validation_score', 0)
                 vr = quality.get('validation_rating', '?')
                 logger.info(f"  ✓ Messages generated (validation: {vs}/100 {vr})")
+                messages_data['_validation'] = quality
                 return messages_data
             except json.JSONDecodeError as json_err:
                 logger.error(f"  ✗ JSON parsing failed: {str(json_err)}")
@@ -413,6 +415,11 @@ Only return valid JSON, no other text."""
             'Message Generated Date': datetime.now().strftime('%Y-%m-%d'),
             'Generate Messages': False  # Uncheck the checkbox
         }
+        
+        # Add validation fields if available
+        quality = messages_data.get('_validation')
+        if quality:
+            update_fields.update(validation_fields_for_airtable(quality))
         
         # Update the record
         try:
