@@ -38,7 +38,9 @@ from pyairtable.formulas import match
 from confidence_utils import calculate_confidence_score
 from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention, classify_persona)
+                                   suppressed_to_do_not_mention, classify_persona,
+                                   inline_quality_check, validate_and_retry,
+                                   full_validate_outreach, generate_validate_loop)
 
 # Import fuzzy matching utilities
 try:
@@ -2012,6 +2014,31 @@ Return ONLY JSON."""
             
             data = json.loads(json_str.strip())
             
+            # Full validation loop: structural + web search + auto-regen
+            persona = classify_persona(lead_title)
+            
+            def gen_fn(feedback=None):
+                regen_prompt = prompt + (f"\n\n{feedback}" if feedback else "")
+                msg = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'], max_tokens=2000,
+                    messages=[{"role": "user", "content": regen_prompt}]
+                )
+                rt = "".join(b.text for b in msg.content if hasattr(b, 'text'))
+                rj = rt.split("```json")[1].split("```")[0] if "```json" in rt else (rt[rt.find("{"):rt.rfind("}")+1] if "{" in rt else None)
+                return json.loads(rj.strip()) if rj else None
+            
+            val_context = {
+                'lead_name': lead_name, 'lead_title': lead_title,
+                'company_name': company_name, 'company_data': company_fields,
+            }
+            
+            data, quality = generate_validate_loop(
+                self.anthropic_client, self.config['anthropic']['model'],
+                gen_fn, val_context, persona=persona, pre_generated=data
+            )
+            vs = quality.get('validation_score', 0)
+            logger.info(f"  Validation: {vs}/100 ({quality.get('validation_rating', '?')})")
+            
             # Update lead record with outreach using correct field names
             outreach_update = {
                 'Message Generated Date': datetime.now().strftime('%Y-%m-%d')
@@ -2274,7 +2301,36 @@ Return ONLY JSON."""
             else:
                 return None
             
-            return json.loads(json_str.strip())
+            data = json.loads(json_str.strip())
+            
+            # Full validation loop: structural + web search + auto-regen
+            persona = classify_persona(lead_title)
+            
+            def gen_fn(feedback=None):
+                regen_prompt = prompt + (f"\n\n{feedback}" if feedback else "")
+                msg = self.anthropic_client.messages.create(
+                    model=self.config['anthropic']['model'], max_tokens=1500,
+                    messages=[{"role": "user", "content": regen_prompt}]
+                )
+                rt = "".join(b.text for b in msg.content if hasattr(b, 'text'))
+                rj = rt.split("```json")[1].split("```")[0] if "```json" in rt else (rt[rt.find("{"):rt.rfind("}")+1] if "{" in rt else None)
+                return json.loads(rj.strip()) if rj else None
+            
+            val_context = {
+                'lead_name': lead_name, 'lead_title': lead_title,
+                'company_name': company_name, 'company_data': company_fields,
+                'trigger_type': trigger_type,
+                'trigger_description': headline,
+            }
+            
+            data, quality = generate_validate_loop(
+                self.anthropic_client, self.config['anthropic']['model'],
+                gen_fn, val_context, persona=persona, source_type='trigger',
+                pre_generated=data
+            )
+            logger.info(f"  Trigger validation: {quality.get('validation_score', 0)}/100")
+            
+            return data
             
         except Exception as e:
             logger.debug(f"Error generating trigger outreach: {e}")
