@@ -17,7 +17,9 @@ from pyairtable import Api
 from confidence_utils import calculate_confidence_score
 from company_profile_utils import (load_company_profile, load_persona_messaging, build_value_proposition, 
                                    build_outreach_philosophy, filter_by_confidence,
-                                   suppressed_to_do_not_mention, classify_persona)
+                                   suppressed_to_do_not_mention, classify_persona,
+                                   inline_quality_check, validate_and_retry,
+                                   full_validate_outreach, generate_validate_loop)
 
 # Configure logging
 logging.basicConfig(
@@ -1091,12 +1093,27 @@ Only return valid JSON."""
         if lead_icp_score and lead_icp_score >= 40:
             try:
                 logger.info(f"  Generating general outreach messages...")
-                outreach_messages = self.generate_general_outreach(
-                    lead_name=existing_record['fields'].get('Lead Name', ''),
-                    title=enriched_data.get('title', ''),
-                    company_name=existing_record['fields'].get('Company Name', ''),
-                    lead_icp=lead_icp_score,
-                    company_icp=company_icp
+                lead_title = enriched_data.get('title', '')
+                persona = classify_persona(lead_title)
+                ln = existing_record['fields'].get('Lead Name', '')
+                cn = existing_record['fields'].get('Company Name', '')
+                
+                def gen_fn(feedback=None):
+                    return self.generate_general_outreach(
+                        lead_name=ln, title=lead_title,
+                        company_name=cn, lead_icp=lead_icp_score,
+                        company_icp=company_icp
+                    )
+                
+                val_context = {
+                    'lead_name': ln, 'lead_title': lead_title,
+                    'company_name': cn,
+                    'company_data': existing_record['fields'],
+                }
+                
+                outreach_messages, quality = generate_validate_loop(
+                    self.anthropic_client, self.config['anthropic']['model'],
+                    gen_fn, val_context, persona=persona
                 )
                 
                 if outreach_messages:
@@ -1107,7 +1124,9 @@ Only return valid JSON."""
                     update_fields['LinkedIn InMail Subject'] = outreach_messages.get('linkedin_inmail_subject', '')
                     update_fields['LinkedIn InMail Body'] = outreach_messages.get('linkedin_inmail_body', '')
                     update_fields['Message Generated Date'] = datetime.now().strftime('%Y-%m-%d')
-                    logger.info(f"  ✓ Outreach messages generated")
+                    vs = quality.get('validation_score', 0)
+                    vr = quality.get('validation_rating', '?')
+                    logger.info(f"  ✓ Outreach generated (validation: {vs}/100 {vr})")
             except Exception as e:
                 logger.warning(f"  Could not generate outreach: {str(e)}")
         else:
