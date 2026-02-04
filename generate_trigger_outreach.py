@@ -236,14 +236,18 @@ YOUR MISSION: Create outreach that uses the TRIGGER EVENT as the reason for reac
 
 CRITICAL RULES FOR TRIGGER-BASED OUTREACH:
 
-1. Lead with the trigger — the event/news is WHY you're reaching out
+1. Lead with the trigger. The event/news is WHY you're reaching out
 2. THEN connect ONE Rezon strength to THEIR specific situation arising from the trigger
-3. Show you know them — reference their background naturally, don't explain their situation to them
+3. Show you know them. Reference their background naturally, don't explain their situation to them
 4. Include ONE proof point woven naturally (multinational pharma track record, regulatory credentials, technical capability)
-5. Be human, not AI-polished — natural language, no excessive formatting
-6. No bullet point lists — weave key points into natural sentences
-7. Soft CTA — suggest a conversation, don't push a meeting
-8. No ** for emphasis — clean, simple formatting only
+5. Be human, not AI-polished. Natural language, no excessive formatting
+6. No bullet point lists. Weave key points into natural sentences
+7. Soft CTA. Suggest a conversation, don't push a meeting
+8. ABSOLUTELY NO em-dashes (—). Use commas, periods, or "and" instead. Zero tolerance.
+9. No ** for emphasis. Clean, simple text only
+10. Write full sentences with "I" as subject. Don't drop pronouns to sound punchy.
+    BAD: "Saw you're speaking at..."  GOOD: "I noticed you're speaking at..."
+    BAD: "Heading to BioEurope and..."  GOOD: "I'll be at BioEurope and..."
 
 TRIGGER-SPECIFIC GUIDANCE:
 """
@@ -339,13 +343,13 @@ BAD (Generic CDMO pitch):
 "I noticed you're attending BioEurope. As a CDMO, we'd love to meet to discuss your manufacturing needs."
 
 GOOD (Their situation + Rezon's specific relevance):
-"Saw you're speaking on ADC development at BioEurope — your work on site-specific conjugation at commercial scale is exactly where our pharma-validated facilities add value. Would love to grab a coffee at the event."
+"I noticed you're speaking on ADC development at BioEurope. Your work on site-specific conjugation at commercial scale is exactly where our pharma-validated facilities add value. Would love to grab a coffee at the event."
 
 BAD (Features list after trigger):
 "Congratulations on the Series C! Rezon Bio offers cost-effective manufacturing solutions that could help you scale."
 
 GOOD (Trigger + why meeting helps THEM):
-"Great news on the Series C — exciting to see Tubulis advancing the ADC platform. As you plan the next manufacturing stage, our EU-based setup can cut costs significantly vs US CDMOs while staying EMA/FDA-aligned. Happy to share specifics."
+"Great news on the Series C, exciting to see Tubulis advancing the ADC platform. As you plan the next manufacturing stage, our EU-based setup can cut costs significantly vs US CDMOs while staying EMA/FDA-aligned. Happy to share specifics."
 
 Return as JSON:
 {{
