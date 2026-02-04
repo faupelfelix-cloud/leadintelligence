@@ -18,7 +18,8 @@ from pyairtable import Api
 from company_profile_utils import (build_outreach_philosophy, build_value_proposition,
                                    load_company_profile, load_persona_messaging,
                                    inline_quality_check, validate_and_retry,
-                                   full_validate_outreach, generate_validate_loop)
+                                   full_validate_outreach, generate_validate_loop,
+                                   validation_fields_for_airtable, classify_persona)
 
 # Configure logging
 logging.basicConfig(
@@ -238,7 +239,7 @@ CRITICAL RULES FOR TRIGGER-BASED OUTREACH:
 1. Lead with the trigger — the event/news is WHY you're reaching out
 2. THEN connect ONE Rezon strength to THEIR specific situation arising from the trigger
 3. Show you know them — reference their background naturally, don't explain their situation to them
-4. Include ONE proof point woven naturally (Sandoz qualification, biosimilar track record, FDA/EMA)
+4. Include ONE proof point woven naturally (multinational pharma track record, regulatory credentials, technical capability)
 5. Be human, not AI-polished — natural language, no excessive formatting
 6. No bullet point lists — weave key points into natural sentences
 7. Soft CTA — suggest a conversation, don't push a meeting
@@ -338,7 +339,7 @@ BAD (Generic CDMO pitch):
 "I noticed you're attending BioEurope. As a CDMO, we'd love to meet to discuss your manufacturing needs."
 
 GOOD (Their situation + Rezon's specific relevance):
-"Saw you're speaking on ADC development at BioEurope — your work on site-specific conjugation at commercial scale is exactly where our Sandoz-qualified facilities add value. Would love to grab a coffee at the event."
+"Saw you're speaking on ADC development at BioEurope — your work on site-specific conjugation at commercial scale is exactly where our pharma-validated facilities add value. Would love to grab a coffee at the event."
 
 BAD (Features list after trigger):
 "Congratulations on the Series C! Rezon Bio offers cost-effective manufacturing solutions that could help you scale."
@@ -443,6 +444,7 @@ Only return valid JSON, no other text."""
             vs = quality.get('validation_score', 0)
             vr = quality.get('validation_rating', '?')
             logger.info(f"  Messages generated (validation: {vs}/100 {vr})")
+            messages_data['_validation'] = quality
             return messages_data
             
         except json.JSONDecodeError as e:
@@ -469,6 +471,11 @@ Only return valid JSON, no other text."""
                 'Best Time to Send': messages_data.get('best_time_to_send', ''),
                 'Follow Up Angle': messages_data.get('follow_up_angle', '')
             }
+            
+            # Add validation fields if available
+            quality = messages_data.get('_validation')
+            if quality:
+                update_fields.update(validation_fields_for_airtable(quality))
             
             self.trigger_history_table.update(trigger_record_id, update_fields)
             logger.info(f"  Saved to Trigger History")
