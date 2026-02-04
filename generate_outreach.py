@@ -15,7 +15,9 @@ from typing import Dict, List, Optional
 import anthropic
 from pyairtable import Api
 from company_profile_utils import (build_outreach_philosophy, build_value_proposition, 
-                                   load_company_profile, load_persona_messaging)
+                                   load_company_profile, load_persona_messaging,
+                                   inline_quality_check, validate_and_retry,
+                                   full_validate_outreach, generate_validate_loop)
 
 # Configure logging
 logging.basicConfig(
@@ -348,7 +350,41 @@ Only return valid JSON, no other text."""
             
             try:
                 messages_data = json.loads(result_text)
-                logger.info(f"  ✓ Messages generated successfully")
+                
+                # Full validation loop: structural + web search + auto-regen
+                persona = classify_persona(title)
+                
+                def gen_fn(feedback=None):
+                    regen_prompt = outreach_prompt + (f"\n\n{feedback}" if feedback else "")
+                    msg = self.anthropic_client.messages.create(
+                        model=self.config['anthropic']['model'], max_tokens=2000,
+                        messages=[{"role": "user", "content": regen_prompt}]
+                    )
+                    rt = "".join(b.text for b in msg.content if hasattr(b, 'text')).strip()
+                    if rt.startswith("```json"): rt = rt[7:]
+                    if rt.startswith("```"): rt = rt[3:]
+                    if rt.endswith("```"): rt = rt[:-3]
+                    rt = rt.strip()
+                    if not rt.startswith("{"):
+                        s = rt.find("{"); e = rt.rfind("}")
+                        if s != -1: rt = rt[s:e+1]
+                    rt = re.sub(r',(\s*[}\]])', r'\1', rt)
+                    return json.loads(rt)
+                
+                val_context = {
+                    'lead_name': lead_name, 'lead_title': title,
+                    'company_name': company_name,
+                    'company_data': company_context or {},
+                }
+                
+                messages_data, quality = generate_validate_loop(
+                    self.anthropic_client, self.config['anthropic']['model'],
+                    gen_fn, val_context, persona=persona, pre_generated=messages_data
+                )
+                
+                vs = quality.get('validation_score', 0)
+                vr = quality.get('validation_rating', '?')
+                logger.info(f"  ✓ Messages generated (validation: {vs}/100 {vr})")
                 return messages_data
             except json.JSONDecodeError as json_err:
                 logger.error(f"  ✗ JSON parsing failed: {str(json_err)}")
@@ -445,6 +481,8 @@ Only return valid JSON, no other text."""
                     logger.error(f"  ✗ Generation failed: {messages_data['error']}")
                     failed_count += 1
                     continue
+                
+                # Validation already done inside generate_outreach_messages via generate_validate_loop
                 
                 # Save to Airtable
                 logger.info("  Saving messages...")
