@@ -1552,9 +1552,13 @@ CAMPAIGN INFORMATION:
     # Do-not-flag rules
     do_not_flag = """
 DO NOT flag as issues:
-- Lead name/title/company (already verified)
-- General statements that don't make specific claims
-- Standard CDMO value propositions"""
+- Lead name/title/company (already verified from our database)
+- Rezon Bio's own capabilities (95% batch success, FDA/EMA approvals, etc. — these are OUR claims, not claims about the prospect)
+
+ALWAYS flag and verify:
+- Any specific claim about the PROSPECT's company, products, pipeline, funding, or news
+- Any reference to specific drug names, program names, or therapeutic mechanisms
+- Any claim about the prospect's recent activities or achievements"""
     
     if source_type == "campaign":
         do_not_flag += """
@@ -1572,7 +1576,8 @@ ONLY flag as issues:
     if source_type == "campaign":
         campaign_note = "IMPORTANT: This lead comes from a campaign list. Event attendance references are VERIFIED FACTS."
     
-    validation_prompt = f"""You are a quality assurance specialist reviewing B2B outreach messages for a biologics CDMO.
+    validation_prompt = f"""You are a fact-checking specialist reviewing B2B outreach messages for a biologics CDMO.
+Your PRIMARY job is to verify that FACTUAL CLAIMS in the messages are accurate using web search.
 
 CONTEXT (from our database - already verified):
 {context_str}
@@ -1584,28 +1589,49 @@ OUTREACH MESSAGES TO VALIDATE:
 
 IMPORTANT: Lead's name, title, and company are ALREADY VERIFIED. Do NOT mark these as issues.
 
-VALIDATION TASKS:
-1. Check specific claims (funding amounts, pipeline stages, partnerships, recent news), are they accurate?
-2. Detect outdated information, has anything changed recently?
-3. Check for hallucinations, fabricated or unverifiable statements?
-4. Tone & appropriateness for recipient's seniority and industry
-5. Factual accuracy of any specific facts mentioned
-6. FORMATTING: Check for em-dash characters (, ). If ANY em-dash is found, flag it as an issue and deduct 10 points. Em-dashes are strictly banned.
-7. TIMING: If the message references a conference or event, check that the relative timing ("next week", "next month", "in March") is plausible given today's date ({datetime.now().strftime('%Y-%m-%d')}). If a conference date is mentioned in the context above, verify the message uses correct timing.
+═══════════════════════════════════════════════════════════
+PRIORITY 1: FACTUAL CONTENT VERIFICATION (use web search!)
+═══════════════════════════════════════════════════════════
+You MUST use web search to check every specific factual claim in the messages.
+For each claim, search and verify. Examples of claims to check:
+
+- Company/product names: Is "ODC-IL2" a real product from this company? Is "GM101" their actual program?
+- Pipeline/drug claims: "registrational trial success", "BLA filing ahead", "FDA approval for neffy"
+- Company descriptions: "AI-designed proteins", "needle-free epinephrine", "conditionally activated cytokines"
+- Stage claims: "Phase 3 readouts", "Series C", "expanding into biologics"
+- Technology claims: "site-specific conjugation", "DR5 agonist", "NRP2 modulator"
+- Any company activity or news referenced in the messages
+
+For EACH factual claim you find, report:
+- What was claimed in the message
+- What you found via web search (confirmed / could not confirm / contradicted)
+- Whether it is accurate, outdated, or fabricated
+
+If a claim cannot be confirmed via web search, flag it as "UNVERIFIABLE" — this is important.
+
+═══════════════════════════════════════════════════════════
+PRIORITY 2: FORMATTING AND TIMING CHECKS
+═══════════════════════════════════════════════════════════
+After content verification, also check:
+- Em-dash characters (the — character): If ANY are found, flag as issue and deduct 10 points
+- Event timing: If messages reference a conference, check the relative timing ("next week", "next month") against today's date ({datetime.now().strftime('%Y-%m-%d')}) and any event date in the context above
 
 {do_not_flag}
 
-RATING SCALE:
-- HIGH (90-100): Accurate, safe to send
-- MEDIUM (70-89): Minor uncertainties, quick review recommended
-- LOW (50-69): Claims appear incorrect or outdated, manual review required
-- CRITICAL (0-49): Major factual errors, do not send
+RATING SCALE — based primarily on FACTUAL ACCURACY:
+- HIGH (90-100): All factual claims confirmed accurate via web search. Safe to send.
+- MEDIUM (70-89): Most claims confirmed, 1-2 minor uncertainties or unverifiable claims. Quick review recommended.
+- LOW (50-69): Claims appear incorrect, outdated, or several could not be verified. Manual review required.
+- CRITICAL (0-49): Major factual errors found via web search. Do not send.
 
 Return ONLY valid JSON:
 {{
     "validity_score": 85,
     "validity_rating": "HIGH|MEDIUM|LOW|CRITICAL",
-    "issues_found": ["Specific issue with message content"],
+    "content_checks": [
+        {{"claim": "what the message claims", "search_result": "what web search found", "status": "CONFIRMED|UNVERIFIABLE|OUTDATED|INCORRECT"}}
+    ],
+    "issues_found": ["Specific issues requiring attention"],
     "suggested_edits": "Specific edits needed or null",
     "recommendation": "Action for the sales team"
 }}
@@ -1615,7 +1641,7 @@ Return ONLY JSON."""
     try:
         response = anthropic_client.messages.create(
             model=model,
-            max_tokens=2000,
+            max_tokens=4000,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": validation_prompt}]
         )
@@ -1749,6 +1775,7 @@ def generate_validate_loop(anthropic_client, model: str,
                 'validation_score': val_score,
                 'validation_rating': validation.get('validity_rating', 'MEDIUM'),
                 'issues': structural.get('issues', []) + validation.get('issues_found', []),
+                'content_checks': validation.get('content_checks', []),
                 'suggested_edits': validation.get('suggested_edits'),
                 'passed': True,
                 'validated_at': validation.get('validated_at')
@@ -1788,6 +1815,7 @@ def generate_validate_loop(anthropic_client, model: str,
         'validation_score': val_score,
         'validation_rating': validation.get('validity_rating', 'LOW'),
         'issues': structural.get('issues', []) + validation.get('issues_found', []),
+        'content_checks': validation.get('content_checks', []),
         'suggested_edits': validation.get('suggested_edits'),
         'passed': False,
         'validated_at': validation.get('validated_at', datetime.now().isoformat())
@@ -1810,23 +1838,60 @@ def validation_fields_for_airtable(quality: Dict) -> Dict:
         - Outreach Validation Notes
         - Outreach Validated At
     """
-    # Format issues into readable notes
     notes_parts = []
+    
+    # === SECTION 1: Content verification results (from web search) ===
+    content_checks = quality.get('content_checks', [])
+    if content_checks:
+        notes_parts.append("🔍 CONTENT VERIFICATION:")
+        for check in content_checks[:10]:
+            claim = check.get('claim', '?')
+            result = check.get('search_result', '?')
+            status = check.get('status', '?')
+            # Use emoji for quick visual scanning
+            if status == 'CONFIRMED':
+                icon = '✅'
+            elif status == 'UNVERIFIABLE':
+                icon = '❓'
+            elif status == 'OUTDATED':
+                icon = '⏰'
+            elif status == 'INCORRECT':
+                icon = '❌'
+            else:
+                icon = '•'
+            notes_parts.append(f"  {icon} {claim}")
+            notes_parts.append(f"     → {result}")
+    
+    # === SECTION 2: Issues requiring attention ===
     issues = quality.get('issues', [])
-    if issues:
-        notes_parts.append("⚠️ ISSUES:")
-        for issue in issues[:8]:
+    # Separate structural issues from validation issues
+    structural_issues = [i for i in issues if any(kw in i.upper() for kw in 
+                        ['RECYCLED', 'PERSONA MISMATCH', 'TOO LONG', 'TOO SHORT', 
+                         'TOO SIMILAR', 'PROOF POINT', 'EM-DASH', 'CLIPPED OPENER',
+                         'PLACEHOLDER', 'STRUCTURAL'])]
+    content_issues = [i for i in issues if i not in structural_issues]
+    
+    if content_issues:
+        notes_parts.append("\n⚠️ CONTENT ISSUES:")
+        for issue in content_issues[:6]:
             notes_parts.append(f"  • {issue}")
     
+    if structural_issues:
+        notes_parts.append("\n📝 STYLE ISSUES:")
+        for issue in structural_issues[:4]:
+            notes_parts.append(f"  • {issue}")
+    
+    # === SECTION 3: Suggested edits ===
     suggested = quality.get('suggested_edits')
     if suggested:
         notes_parts.append(f"\n✏️ EDITS: {suggested}")
     
+    # === SECTION 4: Scores ===
     structural = quality.get('structural_score')
     if structural is not None:
-        notes_parts.append(f"\n📊 Structural: {structural}/100 | Validation: {quality.get('validation_score', 0)}/100")
+        notes_parts.append(f"\n📊 Structural: {structural}/100 | Content: {quality.get('validation_score', 0)}/100")
     
-    notes = "\n".join(notes_parts) if notes_parts else "✓ Passed validation"
+    notes = "\n".join(notes_parts) if notes_parts else "✓ Passed all checks"
     
     validated_at = quality.get('validated_at', '')
     if validated_at and 'T' in validated_at:
