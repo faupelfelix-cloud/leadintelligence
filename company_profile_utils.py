@@ -522,8 +522,8 @@ FDA approved, 95% batch success rate. Quality is uncompromised.
     segment_pitch = _match_segment_pitch(profile, safe_fields)
     
     # === SELECT PROOF POINTS ===
-    # Pick 2-3 most relevant proof points based on prospect context
-    proof_points = _select_proof_points(profile, safe_fields)
+    # Pick 2-3 from Company Profile Key Strengths, ordered by PERSONA relevance
+    proof_points = _select_proof_points(profile, safe_fields, persona_bucket, persona_messaging)
     
     # === PAIN POINTS THEY LIKELY HAVE ===
     pain_points = _match_pain_points(profile, safe_fields)
@@ -711,6 +711,38 @@ Instead, write like you'd actually talk to someone at a conference bar.
 
 Words/phrases that WORK: "noticed", "seems like", "might be worth", "happy to chat",
 "if it's useful", "curious whether", "no pressure", "even 15 minutes"
+
+═══════════════════════════════════════════════════════════
+ANTI-REPETITION — CRITICAL RULE:
+═══════════════════════════════════════════════════════════
+If two recipients at the same company compared messages, they should NOT look
+like the same template with names swapped. Each message must feel individually
+written. To achieve this:
+
+RULE 1: Pick ONE proof point per message. Not two, not three. ONE.
+  - An Operations person gets: PPQ execution or tech transfer speed
+  - An R&D person gets: CHO platform depth or analytical capabilities  
+  - A Procurement person gets: cost positioning or supply reliability
+  - A C-level gets: strategic fit or partner agility
+  They should NEVER all get "Sandoz + cost + batch success rate" — that's lazy.
+
+RULE 2: Vary your sentence structures across messages.
+  - DON'T always write "We sit in the lower half of EU cost benchmarks while maintaining..."
+  - DON'T always write "Our facilities were qualified by Sandoz"  
+  - DON'T always write "pharma-grade quality without the premium price tag"
+  - These phrases must NOT appear in every message. Rewrite the same idea in fresh words.
+
+RULE 3: The value prop paragraph must match the PERSONA's priorities.
+  - For R&D: process development approach, molecule experience, scientific depth
+  - For Operations: execution track record, milestones, facility specs, batch success
+  - For Quality: regulatory approvals, inspection history, documentation standards
+  - For Procurement: cost, capacity, dual sourcing, pricing transparency
+  - For C-level: strategic fit, scaling with them, partner priority
+  - NEVER write a generic "we're a quality EU CDMO at good cost" paragraph for everyone
+
+RULE 4: The opening line must be genuinely different per person.
+  - Reference something specific to THEIR work, not just "Saw you're a DCAT member"
+  - If you can't find something specific, at least vary the opener structure
 """
 
 
@@ -807,45 +839,121 @@ SPECIFIC ANGLE IDEAS for this persona (pick the best fit for their company situa
     return section
 
 
-def _select_proof_points(profile: Dict, company_fields: Dict) -> str:
-    """Select 2-3 most relevant proof points for this prospect."""
+def _select_proof_points(profile: Dict, company_fields: Dict, 
+                         persona: str = 'General',
+                         persona_messaging: Dict = None) -> str:
+    """Select 2-3 most relevant proof points from Company Profile, ordered by persona.
     
+    Reads the 'Key Strengths' field from the Company Profile table and selects
+    which strengths to lead with based on the persona. The persona messaging
+    'Proof Points' field determines the priority order.
+    
+    This replaces the old hardcoded proof point pool — everything now comes
+    from your Company Profile table in Airtable.
+    
+    Args:
+        profile: Company Profile fields from Airtable
+        company_fields: Prospect's company data (for geography/tech matching)
+        persona: Classified persona bucket name
+        persona_messaging: Dict from load_persona_messaging() (optional)
+    """
+    
+    # === PULL PROOF POINTS FROM COMPANY PROFILE ===
+    key_strengths = profile.get('Key Strengths', '') if profile else ''
+    
+    # Parse Key Strengths into individual items
+    # Handles formats like "- item" or "1. item" or "item\nitem"
+    strength_items = []
+    if key_strengths:
+        for line in key_strengths.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # Strip leading bullet/number markers
+            cleaned = line.lstrip('-•·').strip()
+            if cleaned and cleaned[0].isdigit() and '.' in cleaned[:4]:
+                cleaned = cleaned.split('.', 1)[1].strip()
+            if cleaned and len(cleaned) > 5:
+                strength_items.append(cleaned)
+    
+    # === GET PERSONA-SPECIFIC PROOF POINT PRIORITIES ===
+    # The Persona Messaging table's 'Proof Points' field tells us which 
+    # strengths THIS persona cares about most
+    persona_proof_text = ''
+    if persona_messaging and persona in persona_messaging:
+        persona_proof_text = persona_messaging[persona].get('Proof Points', '').lower()
+    elif persona in DEFAULT_PERSONA_MESSAGING:
+        persona_proof_text = DEFAULT_PERSONA_MESSAGING[persona].get('Proof Points', '').lower()
+    
+    # === SCORE EACH STRENGTH BY PERSONA RELEVANCE ===
+    # Match words from the persona's Proof Points against each strength
+    scored = []
+    for strength in strength_items:
+        strength_lower = strength.lower()
+        score = 0
+        
+        # Check how many persona proof point keywords appear in this strength
+        if persona_proof_text:
+            # Extract meaningful words (skip common words)
+            skip_words = {'the', 'and', 'for', 'with', 'from', 'our', 'we', 'are', 'is', 
+                          'at', 'in', 'of', 'to', 'a', 'an', 'as', 'by', 'not', 'no', 'but'}
+            proof_words = [w for w in persona_proof_text.split() if len(w) > 2 and w not in skip_words]
+            
+            for word in proof_words:
+                if word in strength_lower:
+                    score += 1
+        
+        scored.append((strength, score))
+    
+    # Sort by score (highest = most relevant to this persona), then original order
+    scored.sort(key=lambda x: -x[1])
+    
+    # === GEOGRAPHY-AWARE FILTERING ===
+    # If we have geography info, boost relevant strengths
+    location = (company_fields.get('Location/HQ', '') or '').lower()
     tech = company_fields.get('Technology Platform', [])
     if isinstance(tech, str):
         tech = [tech]
     tech_str = ' '.join(tech).lower() if tech else ''
     
-    therapeutic = company_fields.get('Therapeutic Areas', [])
-    if isinstance(therapeutic, str):
-        therapeutic = [therapeutic]
-    therapeutic_str = ' '.join(therapeutic).lower() if therapeutic else ''
+    # Re-score with geography/tech bonuses
+    final_scored = []
+    for strength, persona_score in scored:
+        s_lower = strength.lower()
+        geo_bonus = 0
+        
+        # Boost FDA mentions for US prospects
+        if any(x in location for x in ['us', 'united states', 'america', 'boston', 'california']):
+            if 'fda' in s_lower:
+                geo_bonus += 2
+        
+        # Boost EMA mentions for EU prospects
+        if any(x in location for x in ['europ', 'germany', 'france', 'uk', 'swiss', 'netherlands']):
+            if 'ema' in s_lower or 'european' in s_lower:
+                geo_bonus += 2
+        
+        # Boost tech-matching strengths
+        if any(x in tech_str for x in ['biosimilar']) and 'biosimilar' in s_lower:
+            geo_bonus += 2
+        if any(x in tech_str for x in ['bispecific', 'adc']) and any(x in s_lower for x in ['bispecific', 'adc', 'complex']):
+            geo_bonus += 2
+        
+        final_scored.append((strength, persona_score + geo_bonus))
     
-    location = (company_fields.get('Location/HQ', '') or '').lower()
+    final_scored.sort(key=lambda x: -x[1])
     
-    proof_points = []
+    # === SELECT TOP 2-3 ===
+    selected = [s for s, _ in final_scored[:3]]
     
-    # Always relevant
-    proof_points.append("Qualified by Sandoz — sets a high regulatory bar for facility and process standards")
+    # === FALLBACK if Company Profile Key Strengths is empty ===
+    if not selected:
+        # Use persona messaging Proof Points directly as a fallback
+        if persona_proof_text:
+            return f"PROOF POINTS (from persona messaging):\n{persona_proof_text}"
+        else:
+            return "PROOF POINTS: European biologics CDMO with pharma-grade quality standards"
     
-    # Regulatory — pick based on geography
-    if any(x in location for x in ['us', 'united states', 'america', 'boston', 'san francisco', 'california']):
-        proof_points.append("FDA and EMA approved facilities — dual filing capability for US+EU")
-    elif any(x in location for x in ['europ', 'germany', 'france', 'uk', 'swiss', 'netherlands', 'belgium']):
-        proof_points.append("EMA approved with FDA track record — strong European regulatory foundation")
-    else:
-        proof_points.append("Global regulatory compliance — FDA, EMA, and Anvisa approved")
-    
-    # Technology match
-    if any(x in tech_str for x in ['biosimilar']):
-        proof_points.append("Proven biosimilar development track record — gene to market experience")
-    elif any(x in tech_str for x in ['bispecific', 'adc', 'antibody-drug']):
-        proof_points.append("Specialized in complex mammalian molecules including bispecifics and ADCs")
-    elif any(x in tech_str for x in ['mab', 'monoclonal', 'antibod']):
-        proof_points.append("Core expertise in monoclonal antibody manufacturing at 500-2000L scale")
-    else:
-        proof_points.append("State-of-the-art mammalian cell culture infrastructure (CHO platform)")
-    
-    return '\n'.join(f"- {pp}" for pp in proof_points[:3])
+    return '\n'.join(f"- {pp}" for pp in selected)
 
 
 def _match_pain_points(profile: Dict, company_fields: Dict) -> str:
