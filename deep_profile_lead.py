@@ -221,16 +221,18 @@ Return ONLY JSON, no other text."""
             )
             vs = quality.get('validation_score', 0)
             vr = quality.get('validation_rating', '?')
-            logger.info(f"  Validation: {vs}/100 ({vr})")
+            ss = quality.get('structural_score', 0)
+            logger.info(f"  Outreach validation: structural {ss}/100, content {vs}/100 ({vr})")
             
-            return data
+            return data, quality
             
         except Exception as e:
             logger.warning(f"  Error generating outreach: {e}")
-            return None
+            return None, {}
     
-    def _update_lead_outreach(self, lead_id: str, outreach: Dict):
-        """Update lead record with new outreach messages"""
+    def _update_lead_outreach(self, lead_id: str, outreach: Dict, quality: Dict = None):
+        """Update lead record with new outreach messages and validation results"""
+        from company_profile_utils import validation_fields_for_airtable
         
         update_fields = {
             'Message Generated Date': datetime.now().strftime('%Y-%m-%d')
@@ -248,6 +250,10 @@ Return ONLY JSON, no other text."""
             update_fields['LinkedIn InMail Subject'] = outreach['linkedin_inmail_subject']
         if outreach.get('linkedin_inmail'):
             update_fields['LinkedIn InMail Body'] = outreach['linkedin_inmail']
+        
+        # Add validation fields
+        if quality:
+            update_fields.update(validation_fields_for_airtable(quality))
         
         try:
             self.leads_table.update(lead_id, update_fields)
@@ -880,7 +886,7 @@ Only return valid JSON, no other text."""
                 
                 # Generate personalized outreach using the deep profile
                 logger.info("  Generating personalized outreach messages...")
-                outreach = self._generate_outreach_with_profile(
+                outreach, quality = self._generate_outreach_with_profile(
                     lead_id=record_id,
                     lead_name=lead_name,
                     lead_title=title,
@@ -889,7 +895,7 @@ Only return valid JSON, no other text."""
                 )
                 
                 if outreach:
-                    self._update_lead_outreach(record_id, outreach)
+                    self._update_lead_outreach(record_id, outreach, quality=quality)
                 else:
                     logger.warning("  ⚠ Could not generate outreach messages")
                 
