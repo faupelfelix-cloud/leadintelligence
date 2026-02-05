@@ -19,7 +19,8 @@ from company_profile_utils import (load_company_profile, load_persona_messaging,
                                    build_outreach_philosophy, filter_by_confidence,
                                    suppressed_to_do_not_mention, classify_persona,
                                    inline_quality_check, validate_and_retry,
-                                   full_validate_outreach, generate_validate_loop)
+                                   full_validate_outreach, generate_validate_loop,
+                                   validation_fields_for_airtable)
 
 # Configure logging
 logging.basicConfig(
@@ -1124,6 +1125,8 @@ Only return valid JSON."""
                     update_fields['LinkedIn InMail Subject'] = outreach_messages.get('linkedin_inmail_subject', '')
                     update_fields['LinkedIn InMail Body'] = outreach_messages.get('linkedin_inmail_body', '')
                     update_fields['Message Generated Date'] = datetime.now().strftime('%Y-%m-%d')
+                    # Add validation fields
+                    update_fields.update(validation_fields_for_airtable(quality))
                     vs = quality.get('validation_score', 0)
                     vr = quality.get('validation_rating', '?')
                     logger.info(f"  ✓ Outreach generated (validation: {vs}/100 {vr})")
