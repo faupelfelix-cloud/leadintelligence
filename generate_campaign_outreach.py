@@ -1098,10 +1098,14 @@ Return ONLY JSON."""
                 outreach_update['LinkedIn InMail Body'] = data['linkedin_inmail']
             
             # Add validation fields
-            outreach_update.update(validation_fields_for_airtable(quality))
+            val_fields = validation_fields_for_airtable(quality)
+            outreach_update.update(val_fields)
             
             self.leads_table.update(lead_id, outreach_update)
-            logger.info(f"    ✓ Generic outreach messages generated for lead")
+            vr = quality.get('validation_rating', '?')
+            vs = quality.get('validation_score', 0)
+            ss = quality.get('structural_score', 0)
+            logger.info(f"    ✓ Generic outreach messages generated for lead (structural: {ss}/100, validation: {vs}/100 {vr})")
             return True
             
         except Exception as e:
@@ -1986,6 +1990,305 @@ Return ONLY valid JSON:
             logger.info(f"  ✗ Errors: {errors}")
         logger.info(f"{'='*60}")
     
+    # ==================== PROCESS ALL PENDING (full pipeline, skip completed) ====================
+    
+    def process_pending(self, limit: Optional[int] = None, 
+                        campaign_type: str = "general",
+                        campaign_name: str = None,
+                        offset: int = 0,
+                        dry_run: bool = False):
+        """
+        Full pipeline for all campaign leads that don't have outreach yet.
+        
+        For each lead without outreach messages:
+        1. Enrich company (if not yet enriched)
+        2. Enrich lead (if not yet enriched)
+        3. Link campaign lead to enriched records
+        4. Generate outreach messages with validation
+        
+        Skips leads that already have an Email Body (outreach done).
+        Skips leads that were previously excluded.
+        
+        Args:
+            limit: Max leads to process
+            campaign_type: Campaign type for outreach messaging
+            campaign_name: Optional filter to a specific campaign
+            offset: Skip first N leads
+            dry_run: If True, show what would be processed without changes
+        """
+        start_time = datetime.now()
+        
+        logger.info("=" * 60)
+        logger.info("PROCESS ALL PENDING CAMPAIGN LEADS")
+        logger.info("=" * 60)
+        if campaign_name:
+            logger.info(f"Campaign filter: {campaign_name}")
+        logger.info(f"Campaign type: {campaign_type}")
+        if dry_run:
+            logger.info("DRY RUN — no changes will be made")
+        logger.info("=" * 60)
+        
+        # Get all campaign leads
+        try:
+            all_records = self.campaign_leads_table.all()
+        except Exception as e:
+            logger.error(f"Failed to fetch campaign leads: {e}")
+            return
+        
+        # Filter to pending leads (no outreach yet, not excluded)
+        pending = []
+        already_done = 0
+        excluded = 0
+        
+        for r in all_records:
+            fields = r['fields']
+            
+            # Skip if already has outreach
+            if fields.get('Email Body'):
+                already_done += 1
+                continue
+            
+            # Skip if previously excluded
+            notes = fields.get('Processing Notes', '') or ''
+            if notes.startswith('EXCLUDED') or notes.startswith('PRE-EXCLUDED') or notes.startswith('PRE-SCREEN'):
+                excluded += 1
+                continue
+            
+            # Optional campaign name filter
+            if campaign_name:
+                record_campaign = fields.get('Campaign Name', '') or fields.get('Conference Name', '')
+                if campaign_name.lower() not in record_campaign.lower():
+                    continue
+            
+            pending.append(r)
+        
+        logger.info(f"Total campaign leads: {len(all_records)}")
+        logger.info(f"Already have outreach: {already_done}")
+        logger.info(f"Previously excluded: {excluded}")
+        logger.info(f"Pending (to process): {len(pending)}")
+        
+        # Apply offset and limit
+        if offset > 0:
+            pending = pending[offset:]
+            logger.info(f"After offset ({offset}): {len(pending)} remaining")
+        if limit:
+            pending = pending[:limit]
+            logger.info(f"After limit ({limit}): {len(pending)} to process")
+        
+        total = len(pending)
+        if total == 0:
+            logger.info("No pending leads to process!")
+            return
+        
+        if dry_run:
+            logger.info(f"\nDRY RUN — would process {total} leads:")
+            for idx, r in enumerate(pending[:20], 1):
+                f = r['fields']
+                linked = "enriched" if f.get('Linked Lead') else "needs enrichment"
+                logger.info(f"  {idx}. {f.get('Lead Name', '?')} @ {f.get('Company', '?')} [{linked}]")
+            if total > 20:
+                logger.info(f"  ... and {total - 20} more")
+            return
+        
+        # Process each lead
+        stats = {
+            'enriched_company': 0,
+            'enriched_lead': 0, 
+            'existing_company': 0,
+            'existing_lead': 0,
+            'outreach_generated': 0,
+            'excluded': 0,
+            'errors': 0,
+        }
+        
+        rate_limit_delay = self.config.get('web_search', {}).get('rate_limit_delay', 2)
+        
+        for idx, record in enumerate(pending, 1):
+            fields = record['fields']
+            record_id = record['id']
+            name = fields.get('Lead Name', 'Unknown')
+            company = fields.get('Company', 'Unknown')
+            title = fields.get('Title', '')
+            email = fields.get('Email', '')
+            
+            logger.info(f"\n[{idx}/{total}] {name} @ {company}")
+            
+            try:
+                # ===== STEP 1: Ensure company is enriched =====
+                lead_record_ids = fields.get('Linked Lead', [])
+                company_record_ids = fields.get('Linked Company', [])
+                company_data = {}
+                company_record_id = None
+                lead_data = {}
+                lead_record_id = None
+                
+                if company_record_ids:
+                    # Already linked to a company
+                    company_record_id = company_record_ids[0]
+                    company_data = self.companies_table.get(company_record_id)['fields']
+                    logger.info(f"  ✓ Company already linked (ICP: {company_data.get('ICP Fit Score', 'N/A')})")
+                    stats['existing_company'] += 1
+                else:
+                    # Need to find or create company
+                    pre_exclusion = self._is_known_excluded_company(company)
+                    if pre_exclusion:
+                        logger.info(f"  ⚡ PRE-EXCLUDED: {pre_exclusion}")
+                        self._update_campaign_lead_status(record_id, f"PRE-EXCLUDED: {pre_exclusion}")
+                        stats['excluded'] += 1
+                        continue
+                    
+                    company_data, company_record_id = self.lookup_company(company)
+                    
+                    if company_data:
+                        logger.info(f"  ✓ Found existing company (ICP: {company_data.get('ICP Fit Score', 'N/A')})")
+                        stats['existing_company'] += 1
+                    else:
+                        # Quick pre-screen
+                        logger.info(f"  🔍 Pre-screening...")
+                        prescreen = self._quick_prescreen_company(company)
+                        if prescreen and prescreen.get('is_excluded'):
+                            reason = prescreen.get('reason', 'Failed pre-screen')
+                            logger.info(f"  ⚠ PRE-SCREEN EXCLUDED: {reason}")
+                            self._update_campaign_lead_status(record_id, f"PRE-SCREEN EXCLUDED: {reason}")
+                            stats['excluded'] += 1
+                            continue
+                        
+                        # Full enrichment
+                        logger.info(f"  📊 Enriching company...")
+                        company_record_id = self.create_minimal_company(company)
+                        if company_record_id:
+                            self.enrich_company_record(company_record_id, company)
+                            company_data = self.companies_table.get(company_record_id)['fields']
+                            stats['enriched_company'] += 1
+                            time.sleep(rate_limit_delay)
+                        else:
+                            logger.error(f"  ✗ Failed to create company")
+                            stats['errors'] += 1
+                            continue
+                    
+                    # Check ICP after enrichment
+                    icp = company_data.get('ICP Fit Score', 0) or 0
+                    is_excl = self._is_excluded_company(company_data, company)
+                    if is_excl or icp == 0:
+                        reason = is_excl or "ICP Score = 0"
+                        logger.info(f"  ⚠ EXCLUDED: {reason}")
+                        self._update_campaign_lead_status(record_id, f"EXCLUDED: {reason}")
+                        stats['excluded'] += 1
+                        continue
+                
+                # ===== STEP 2: Ensure lead is enriched =====
+                if lead_record_ids:
+                    lead_record_id = lead_record_ids[0]
+                    lead_data = self.leads_table.get(lead_record_id)['fields']
+                    logger.info(f"  ✓ Lead already linked")
+                    stats['existing_lead'] += 1
+                else:
+                    # Find or create lead
+                    lead_data, lead_record_id = self.lookup_lead(email, name, company)
+                    
+                    if lead_data:
+                        logger.info(f"  ✓ Found existing lead")
+                        stats['existing_lead'] += 1
+                    else:
+                        logger.info(f"  📊 Enriching lead...")
+                        lead_record_id = self.create_minimal_lead(name, title, company_record_id)
+                        if lead_record_id:
+                            self.enrich_lead_record(lead_record_id, name, company, title, company_record_id)
+                            lead_data = self.leads_table.get(lead_record_id)['fields']
+                            self._generate_lead_generic_outreach(lead_record_id, name, title, company)
+                            stats['enriched_lead'] += 1
+                            time.sleep(rate_limit_delay)
+                
+                # ===== STEP 3: Link campaign lead =====
+                if lead_record_id and company_record_id:
+                    if not fields.get('Linked Lead'):
+                        self.update_campaign_lead_links(record_id, lead_record_id, company_record_id, lead_data)
+                        # Create trigger event
+                        self.create_trigger_event(
+                            lead_record_id=lead_record_id,
+                            company_record_id=company_record_id,
+                            campaign_fields=fields,
+                            lead_name=name,
+                            company_name=company
+                        )
+                        logger.info(f"  ✓ Campaign lead linked")
+                
+                # ===== STEP 4: Generate outreach =====
+                if not lead_data and lead_record_id:
+                    try:
+                        lead_data = self.leads_table.get(lead_record_id)['fields']
+                    except:
+                        lead_data = {}
+                
+                campaign_context = {
+                    'Campaign Type': fields.get('Campaign Type', campaign_type),
+                    'Conference Name': fields.get('Conference Name', ''),
+                    'Campaign Background': fields.get('Campaign Background', ''),
+                    'Campaign Date': fields.get('Campaign Date', ''),
+                }
+                
+                title = fields.get('Title', lead_data.get('Title', ''))
+                persona = classify_persona(title)
+                company_name = fields.get('Company', company_data.get('Company Name', ''))
+                
+                def gen_fn(feedback=None):
+                    ctx = dict(campaign_context)
+                    if feedback:
+                        ctx['Campaign Background'] = (
+                            ctx.get('Campaign Background', '') + f"\n\n{feedback}"
+                        )
+                    return self.generate_outreach_messages(lead_data, company_data, ctx)
+                
+                val_context = {
+                    'lead_name': name, 'lead_title': title,
+                    'company_name': company_name,
+                    'company_data': company_data,
+                    'campaign_type': campaign_context.get('Campaign Type', ''),
+                    'campaign_name': campaign_context.get('Conference Name', ''),
+                    'campaign_date': campaign_context.get('Campaign Date', ''),
+                }
+                
+                logger.info(f"  ✍ Generating outreach...")
+                messages, quality = generate_validate_loop(
+                    self.anthropic_client, self.config['anthropic']['model'],
+                    gen_fn, val_context, persona=persona, source_type='campaign'
+                )
+                
+                if messages:
+                    if self.update_campaign_lead_outreach(record_id, messages, quality=quality):
+                        vr = quality.get('validation_rating', '?')
+                        vs = quality.get('validation_score', 0)
+                        logger.info(f"  ✓ Outreach generated (validation: {vs}/100 {vr})")
+                        stats['outreach_generated'] += 1
+                else:
+                    logger.warning(f"  ⚠ Failed to generate outreach")
+                    stats['errors'] += 1
+                    
+            except Exception as e:
+                logger.error(f"  ✗ Error: {e}")
+                stats['errors'] += 1
+                continue
+        
+        # Summary
+        elapsed = (datetime.now() - start_time).total_seconds()
+        
+        logger.info(f"\n{'=' * 60}")
+        logger.info("PROCESSING COMPLETE")
+        logger.info(f"{'=' * 60}")
+        logger.info(f"Time: {elapsed/60:.1f} minutes")
+        logger.info(f"Processed: {idx}/{total}")
+        logger.info(f"")
+        logger.info(f"Enrichment:")
+        logger.info(f"  Companies: {stats['enriched_company']} new, {stats['existing_company']} existing")
+        logger.info(f"  Leads: {stats['enriched_lead']} new, {stats['existing_lead']} existing")
+        logger.info(f"  Excluded: {stats['excluded']}")
+        logger.info(f"")
+        logger.info(f"Outreach: {stats['outreach_generated']} generated")
+        logger.info(f"Errors: {stats['errors']}")
+        logger.info(f"{'=' * 60}")
+        
+        return stats
+    
     # ==================== BULK PROCESSING (2000+ leads) ====================
     
     def process_bulk(self, batch_size: int = 50, skip_outreach: bool = False,
@@ -2318,6 +2621,18 @@ Examples:
   
   # Refresh first 10 leads only (test run)
   python process_campaign_leads.py --refresh-outreach --limit 10
+  
+  # Process all pending leads (enrich + outreach, skip those already done)
+  python process_campaign_leads.py --process-pending
+  
+  # Process pending leads for a specific campaign
+  python process_campaign_leads.py --process-pending --campaign-name "Festival of Biologics"
+  
+  # Dry run — see what would be processed
+  python process_campaign_leads.py --process-pending --dry-run
+  
+  # Process pending with limit (e.g. test first 5)
+  python process_campaign_leads.py --process-pending --limit 5
         """
     )
     parser.add_argument('--config', default='config.yaml', help='Config file path')
@@ -2346,10 +2661,12 @@ Examples:
     # Refresh outreach options
     parser.add_argument('--refresh-outreach', action='store_true',
                         help='Regenerate outreach for campaign leads that already have messages')
+    parser.add_argument('--process-pending', action='store_true',
+                        help='Full pipeline for all leads without outreach: enrich + generate messages. Skips leads that already have outreach.')
     parser.add_argument('--campaign-name', type=str, default=None,
-                        help='Filter refresh to a specific campaign (e.g. "DCAT 2025")')
+                        help='Filter to a specific campaign (e.g. "Festival of Biologics 2026")')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Show what would be refreshed without making changes')
+                        help='Show what would be processed without making changes')
     
     args = parser.parse_args()
     
@@ -2363,6 +2680,15 @@ Examples:
             skip_outreach=args.skip_outreach,
             campaign_type=args.campaign_type,
             resume=resume
+        )
+    elif args.process_pending:
+        # Full pipeline for all leads without outreach
+        processor.process_pending(
+            limit=args.limit,
+            campaign_type=args.campaign_type,
+            campaign_name=args.campaign_name,
+            offset=args.offset,
+            dry_run=args.dry_run
         )
     elif args.refresh_outreach:
         # Refresh existing outreach with new prompts
